@@ -22,6 +22,7 @@ public class VideoEditOptions {
 	private String saveMode;
 	private String title;
 	private String segmentsJson;
+	private String textLayersJson;
 
 	public String getSourceType() {
 		return sourceType;
@@ -181,5 +182,13 @@ public class VideoEditOptions {
 
 	public void setSegmentsJson(String segmentsJson) {
 		this.segmentsJson = segmentsJson;
+	}
+
+	public String getTextLayersJson() {
+		return textLayersJson;
+	}
+
+	public void setTextLayersJson(String textLayersJson) {
+		this.textLayersJson = textLayersJson;
 	}
 }

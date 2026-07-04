@@ -11,6 +11,7 @@ import com.example.tool.model.SplitClipHistoryPage;
 import com.example.tool.model.VideoEditOptions;
 import com.example.tool.model.VideoEditResult;
 import com.example.tool.model.VideoEditSegment;
+import com.example.tool.model.VideoTextLayer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -374,7 +375,7 @@ public class HighlightService {
 		return new SplitClipDeleteResult(deleted.size(), deleted, skipped);
 	}
 
-	public VideoEditResult editHighlight(String jobId, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile) {
+	public VideoEditResult editHighlight(String jobId, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, List<MultipartFile> textLayerOverlayFiles) {
 		workspace.ensureBaseDirectories();
 		VideoEditOptions safeOptions = options == null ? new VideoEditOptions() : options;
 		Path source = editSourceForHighlight(jobId, safeOptions);
@@ -383,15 +384,15 @@ public class HighlightService {
 			Path jobDirectory = jobDirectory(jobId);
 			Path workDirectory = jobDirectory.resolve("work");
 			Path output = jobDirectory.resolve("output").resolve("highlight.mp4");
-			renderEditedToOutput(source, output, workDirectory, safeOptions, musicFile, textOverlayFile);
+			renderEditedToOutput(source, output, workDirectory, safeOptions, musicFile, textOverlayFile, textLayerOverlayFiles);
 			updateHighlightManifest(jobId, editTitle(safeOptions, sourceTitle), output, safeOptions);
 			LOGGER.info("[{}] Đã ghi đè video sau chỉnh sửa: {}", jobId, output);
 			return new VideoEditResult(jobId, "/api/highlights/" + jobId + "/download", "/api/highlights/" + jobId + "/preview", "Đã lưu đè video đã chỉnh sửa.");
 		}
-		return createEditedHighlightRecord(source, safeOptions, musicFile, textOverlayFile, sourceTitle);
+		return createEditedHighlightRecord(source, safeOptions, musicFile, textOverlayFile, textLayerOverlayFiles, sourceTitle);
 	}
 
-	public VideoEditResult editSplitClip(String jobId, int clipIndex, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile) {
+	public VideoEditResult editSplitClip(String jobId, int clipIndex, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, List<MultipartFile> textLayerOverlayFiles) {
 		workspace.ensureBaseDirectories();
 		VideoEditOptions safeOptions = options == null ? new VideoEditOptions() : options;
 		Path source = editSourceForSplitClip(jobId, clipIndex, safeOptions);
@@ -400,7 +401,7 @@ public class HighlightService {
 			Path jobDirectory = jobDirectory(jobId);
 			Path workDirectory = jobDirectory.resolve("work");
 			Path output = splitClipOutputPath(jobId, clipIndex);
-			renderEditedToOutput(source, output, workDirectory, safeOptions, musicFile, textOverlayFile);
+			renderEditedToOutput(source, output, workDirectory, safeOptions, musicFile, textOverlayFile, textLayerOverlayFiles);
 			updateSplitClipManifest(jobId, clipIndex, editTitle(safeOptions, sourceTitle), output, safeOptions);
 			LOGGER.info("[{}] Đã ghi đè clip {} sau chỉnh sửa: {}", jobId, clipIndex, output);
 			return new VideoEditResult(jobId,
@@ -408,7 +409,7 @@ public class HighlightService {
 					"/api/split-highlights/" + jobId + "/clips/" + clipIndex + "/preview",
 					"Đã lưu đè clip đã chỉnh sửa.");
 		}
-		return createEditedSplitClipRecord(source, safeOptions, musicFile, textOverlayFile, sourceTitle);
+		return createEditedSplitClipRecord(source, safeOptions, musicFile, textOverlayFile, textLayerOverlayFiles, sourceTitle);
 	}
 
 	private void processNetworkHighlight(HighlightJobStatus status, List<String> videoUrls, Path uploadsDirectory, Path workDirectory,
@@ -1085,7 +1086,7 @@ public class HighlightService {
 		}
 	}
 
-	private VideoEditResult createEditedHighlightRecord(Path source, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, String sourceTitle) {
+	private VideoEditResult createEditedHighlightRecord(Path source, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, List<MultipartFile> textLayerOverlayFiles, String sourceTitle) {
 		String jobId = newJobId();
 		Path jobDirectory = workspace.jobsDirectory().resolve(jobId).normalize();
 		Path uploadDirectory = jobDirectory.resolve("upload");
@@ -1099,7 +1100,7 @@ public class HighlightService {
 			Files.createDirectories(outputDirectory);
 			Path sourceCopy = uploadDirectory.resolve("01-" + safeFileName(title + sourceExtension(source))).normalize();
 			Files.copy(source, sourceCopy, StandardCopyOption.REPLACE_EXISTING);
-			renderEditedToOutput(source, output, workDirectory, options, musicFile, textOverlayFile);
+			renderEditedToOutput(source, output, workDirectory, options, musicFile, textOverlayFile, textLayerOverlayFiles);
 			double duration = ffmpegService.probeDuration(output);
 			String now = Instant.now().toString();
 			HighlightHistoryItem item = new HighlightHistoryItem(
@@ -1123,7 +1124,7 @@ public class HighlightService {
 		}
 	}
 
-	private VideoEditResult createEditedSplitClipRecord(Path source, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, String sourceTitle) {
+	private VideoEditResult createEditedSplitClipRecord(Path source, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, List<MultipartFile> textLayerOverlayFiles, String sourceTitle) {
 		String jobId = newJobId();
 		Path jobDirectory = workspace.jobsDirectory().resolve(jobId).normalize();
 		Path uploadDirectory = jobDirectory.resolve("upload");
@@ -1138,7 +1139,7 @@ public class HighlightService {
 			Files.createDirectories(outputDirectory);
 			Path sourceCopy = uploadDirectory.resolve("01-" + safeFileName(title + sourceExtension(source))).normalize();
 			Files.copy(source, sourceCopy, StandardCopyOption.REPLACE_EXISTING);
-			renderEditedToOutput(source, output, workDirectory, options, musicFile, textOverlayFile);
+			renderEditedToOutput(source, output, workDirectory, options, musicFile, textOverlayFile, textLayerOverlayFiles);
 			double duration = ffmpegService.probeDuration(output);
 			String now = Instant.now().toString();
 			SplitClipHistoryItem item = new SplitClipHistoryItem(
@@ -1167,17 +1168,28 @@ public class HighlightService {
 		}
 	}
 
-	private void renderEditedToOutput(Path source, Path output, Path workDirectory, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile) {
+	private void renderEditedToOutput(Path source, Path output, Path workDirectory, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile,
+			List<MultipartFile> textLayerOverlayFiles) {
 		try {
 			Files.createDirectories(workDirectory);
 			Files.createDirectories(output.getParent());
 			Path music = storeEditMusic(workDirectory, musicFile);
 			Path textOverlay = storeTextOverlay(workDirectory, textOverlayFile);
+			List<VideoTextLayer> textLayers = parseTextLayers(options.getTextLayersJson());
+			List<Path> textLayerOverlays = storeTextLayerOverlays(workDirectory, textLayerOverlayFiles, textLayers.size());
+			boolean hasTimedTextLayers = !textLayers.isEmpty() && textLayerOverlays.size() == textLayers.size();
 			List<VideoEditSegment> segments = editSegments(source, options);
-			Path temp = workDirectory.resolve("edited-" + UUID.randomUUID().toString().substring(0, 8) + ".mp4");
+			Path baseOutput = workDirectory.resolve("edited-base-" + UUID.randomUUID().toString().substring(0, 8) + ".mp4");
+			Path temp = hasTimedTextLayers
+					? workDirectory.resolve("edited-text-" + UUID.randomUUID().toString().substring(0, 8) + ".mp4")
+					: baseOutput;
+			Path singleTextOverlay = hasTimedTextLayers ? null : textOverlay;
 			if (segments.size() <= 1) {
 				VideoEditOptions segmentOptions = copyOptionsForSegment(options, segments.get(0));
-				ffmpegService.renderEditedVideo(source, temp, segmentOptions, music, textOverlay);
+				if (hasTimedTextLayers) {
+					segmentOptions = copyOptionsWithoutLegacyText(segmentOptions);
+				}
+				ffmpegService.renderEditedVideo(source, baseOutput, segmentOptions, music, singleTextOverlay);
 			}
 			else {
 				List<Path> renderedSegments = new ArrayList<>();
@@ -1185,14 +1197,20 @@ public class HighlightService {
 					Path segmentOutput = workDirectory.resolve(String.format(Locale.ROOT, "edit-segment-%02d-%s.mp4", i + 1, UUID.randomUUID().toString().substring(0, 6)));
 					VideoEditOptions segmentOptions = copyOptionsForSegment(options, segments.get(i));
 					segmentOptions.setAudioMode("keep");
-					ffmpegService.renderEditedVideo(source, segmentOutput, segmentOptions, null, textOverlay);
+					if (hasTimedTextLayers) {
+						segmentOptions = copyOptionsWithoutLegacyText(segmentOptions);
+					}
+					ffmpegService.renderEditedVideo(source, segmentOutput, segmentOptions, null, singleTextOverlay);
 					renderedSegments.add(segmentOutput);
 				}
 				Path concatList = workDirectory.resolve("edit-concat-" + UUID.randomUUID().toString().substring(0, 6) + ".txt");
 				writeConcatList(concatList, renderedSegments);
 				Path concatOutput = workDirectory.resolve("edit-concat-" + UUID.randomUUID().toString().substring(0, 6) + ".mp4");
 				ffmpegService.concatSegmentsReencoded(concatList, concatOutput);
-				ffmpegService.applyEditAudio(concatOutput, temp, options.getAudioMode(), music, Boolean.TRUE.equals(options.getMuteOriginalAudio()));
+				ffmpegService.applyEditAudio(concatOutput, baseOutput, options.getAudioMode(), music, Boolean.TRUE.equals(options.getMuteOriginalAudio()));
+			}
+			if (hasTimedTextLayers) {
+				ffmpegService.renderTextLayerOverlays(baseOutput, temp, textLayers, textLayerOverlays);
 			}
 			Files.move(temp, output, StandardCopyOption.REPLACE_EXISTING);
 		}
@@ -1261,6 +1279,32 @@ public class HighlightService {
 		copy.setMuteOriginalAudio(options.getMuteOriginalAudio());
 		copy.setSaveMode(options.getSaveMode());
 		copy.setTitle(options.getTitle());
+		copy.setTextLayersJson(options.getTextLayersJson());
+		return copy;
+	}
+
+	private VideoEditOptions copyOptionsWithoutLegacyText(VideoEditOptions options) {
+		VideoEditOptions copy = new VideoEditOptions();
+		copy.setSourceType(options.getSourceType());
+		copy.setStartSeconds(options.getStartSeconds());
+		copy.setEndSeconds(options.getEndSeconds());
+		copy.setRotationDegrees(options.getRotationDegrees());
+		copy.setVideoZoom(options.getVideoZoom());
+		copy.setOutputWidth(options.getOutputWidth());
+		copy.setOutputHeight(options.getOutputHeight());
+		copy.setOverlayText(null);
+		copy.setTextXPercent(null);
+		copy.setTextYPercent(null);
+		copy.setTextSize(null);
+		copy.setTextColor(null);
+		copy.setTextFont(null);
+		copy.setTextBackground(null);
+		copy.setTextPosition(null);
+		copy.setAudioMode(options.getAudioMode());
+		copy.setMuteOriginalAudio(options.getMuteOriginalAudio());
+		copy.setSaveMode(options.getSaveMode());
+		copy.setTitle(options.getTitle());
+		copy.setTextLayersJson(options.getTextLayersJson());
 		return copy;
 	}
 
@@ -1282,6 +1326,54 @@ public class HighlightService {
 		Path overlay = workDirectory.resolve("text-overlay-" + UUID.randomUUID().toString().substring(0, 8) + ".png").normalize();
 		textOverlayFile.transferTo(overlay);
 		return overlay;
+	}
+
+	private List<Path> storeTextLayerOverlays(Path workDirectory, List<MultipartFile> files, int expectedCount) throws IOException {
+		if (expectedCount <= 0 || files == null || files.isEmpty()) {
+			return List.of();
+		}
+		Files.createDirectories(workDirectory);
+		List<Path> overlays = new ArrayList<>();
+		for (int i = 0; i < files.size() && overlays.size() < expectedCount; i++) {
+			MultipartFile file = files.get(i);
+			if (file == null || file.isEmpty()) {
+				continue;
+			}
+			Path overlay = workDirectory.resolve(String.format(Locale.ROOT, "text-layer-%02d-%s.png", overlays.size() + 1, UUID.randomUUID().toString().substring(0, 8))).normalize();
+			file.transferTo(overlay);
+			overlays.add(overlay);
+		}
+		if (overlays.size() != expectedCount) {
+			throw new IllegalArgumentException("Số lượng file text layer không khớp dữ liệu timeline text.");
+		}
+		return overlays;
+	}
+
+	private List<VideoTextLayer> parseTextLayers(String textLayersJson) {
+		if (textLayersJson == null || textLayersJson.isBlank()) {
+			return List.of();
+		}
+		try {
+			VideoTextLayer[] rawLayers = objectMapper.readValue(textLayersJson, VideoTextLayer[].class);
+			List<VideoTextLayer> layers = new ArrayList<>();
+			for (VideoTextLayer layer : rawLayers) {
+				if (layer == null) {
+					continue;
+				}
+				double start = Math.max(0, round(layer.getStartSeconds()));
+				double end = Math.max(start + 0.1, round(layer.getEndSeconds()));
+				VideoTextLayer safe = new VideoTextLayer();
+				safe.setStartSeconds(start);
+				safe.setEndSeconds(end);
+				safe.setTextXPercent(layer.getTextXPercent());
+				safe.setTextYPercent(layer.getTextYPercent());
+				layers.add(safe);
+			}
+			return layers;
+		}
+		catch (IOException ex) {
+			throw new IllegalArgumentException("Dữ liệu timeline text không hợp lệ.", ex);
+		}
 	}
 
 	private Path editSourceForHighlight(String jobId, VideoEditOptions options) {

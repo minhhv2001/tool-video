@@ -1,6 +1,7 @@
 package com.example.tool.service;
 
 import com.example.tool.model.VideoEditOptions;
+import com.example.tool.model.VideoTextLayer;
 import com.example.tool.config.MediaToolProperties;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -155,6 +156,59 @@ public class FfmpegService {
 		command.add("+faststart");
 		command.add(output.toAbsolutePath().toString());
 		runOrThrow(command, 900, "ffmpeg edit render failed");
+	}
+
+	public void renderTextLayerOverlays(Path input, Path output, List<VideoTextLayer> layers, List<Path> overlays) {
+		if (layers == null || overlays == null || layers.isEmpty() || overlays.isEmpty()) {
+			throw new IllegalArgumentException("Không có text layer để render.");
+		}
+		int count = Math.min(layers.size(), overlays.size());
+		List<String> command = new ArrayList<>();
+		command.add(properties.getFfmpegPath());
+		command.add("-y");
+		command.add("-i");
+		command.add(input.toAbsolutePath().toString());
+		for (int i = 0; i < count; i++) {
+			command.add("-loop");
+			command.add("1");
+			command.add("-i");
+			command.add(overlays.get(i).toAbsolutePath().toString());
+		}
+
+		StringBuilder filter = new StringBuilder("[0:v]null[v0]");
+		for (int i = 0; i < count; i++) {
+			VideoTextLayer layer = layers.get(i);
+			double xPercent = clampPercent(layer.getTextXPercent() == null ? 50.0 : layer.getTextXPercent());
+			double yPercent = clampPercent(layer.getTextYPercent() == null ? 82.0 : layer.getTextYPercent());
+			double start = Math.max(0, layer.getStartSeconds());
+			double end = Math.max(start + 0.1, layer.getEndSeconds());
+			filter.append(";[v").append(i).append("][").append(i + 1).append(":v]")
+					.append(String.format(Locale.ROOT,
+							"overlay=x=(main_w-overlay_w)*%.4f:y=(main_h-overlay_h)*%.4f:enable='between(t,%.3f,%.3f)':format=auto:shortest=1",
+							xPercent / 100.0, yPercent / 100.0, start, end))
+					.append("[v").append(i + 1).append("]");
+		}
+
+		command.add("-filter_complex");
+		command.add(filter.toString());
+		command.add("-map");
+		command.add("[v" + count + "]");
+		command.add("-map");
+		command.add("0:a?");
+		command.add("-c:v");
+		command.add("libx264");
+		command.add("-preset");
+		command.add("veryfast");
+		command.add("-crf");
+		command.add("22");
+		command.add("-pix_fmt");
+		command.add("yuv420p");
+		command.add("-c:a");
+		command.add("copy");
+		command.add("-movflags");
+		command.add("+faststart");
+		command.add(output.toAbsolutePath().toString());
+		runOrThrow(command, 900, "ffmpeg text layer render failed");
 	}
 
 	public void applyEditAudio(Path input, Path output, String audioMode, Path musicFile, boolean muteOriginalAudio) {

@@ -1,3 +1,7 @@
+if (window.ToolComponents && window.ToolComponents.appShell) {
+  window.ToolComponents.appShell.mount('#appRoot');
+}
+
 const dropzone = document.querySelector('#dropzone');
 const fileInput = document.querySelector('#videoFiles');
 const fileList = document.querySelector('#fileList');
@@ -59,6 +63,7 @@ const editorStage = document.querySelector('#editorStage');
 const editorVideoLayer = document.querySelector('#editorVideoLayer');
 const editorVideo = document.querySelector('#editorVideo');
 const editorFrameGuide = document.querySelector('#editorFrameGuide');
+const editorTextLayerCanvas = document.querySelector('#editorTextLayerCanvas');
 const editorTextOverlay = document.querySelector('#editorTextOverlay');
 const editorTextContent = document.querySelector('#editorTextContent');
 const editorTextResize = document.querySelector('#editorTextResize');
@@ -79,6 +84,8 @@ const editorTextColor = document.querySelector('#editorTextColor');
 const editorTextFont = document.querySelector('#editorTextFont');
 const editorTextBackground = document.querySelector('#editorTextBackground');
 const editorOverlayText = document.querySelector('#editorOverlayText');
+const editorAddTextLayer = document.querySelector('#editorAddTextLayer');
+const editorDeleteTextLayer = document.querySelector('#editorDeleteTextLayer');
 const editorAudioMode = document.querySelector('#editorAudioMode');
 const editorMuteOriginal = document.querySelector('#editorMuteOriginal');
 const editorTitleInput = document.querySelector('#editorTitleInput');
@@ -91,7 +98,9 @@ const editorRenderTitle = document.querySelector('#editorRenderTitle');
 const editorRenderMessage = document.querySelector('#editorRenderMessage');
 const editorRenderPercent = document.querySelector('#editorRenderPercent');
 const editorRenderFill = document.querySelector('#editorRenderFill');
+const editorTrimTrackScroll = document.querySelector('#editorTrimTrackScroll');
 const editorTrimTrack = document.querySelector('#editorTrimTrack');
+const editorTimelineThumbs = document.querySelector('#editorTimelineThumbs');
 const editorSegmentsLayer = document.querySelector('#editorSegmentsLayer');
 const editorTrimSelection = document.querySelector('#editorTrimSelection');
 const editorTrimPlayhead = document.querySelector('#editorTrimPlayhead');
@@ -117,6 +126,8 @@ const editorSplitAtPlayhead = document.querySelector('#editorSplitAtPlayhead');
 const editorDeleteSegment = document.querySelector('#editorDeleteSegment');
 const editorResetSegments = document.querySelector('#editorResetSegments');
 const editorSegmentOrderList = document.querySelector('#editorSegmentOrderList');
+const editorTextLayerTimelineScroll = document.querySelector('#editorTextLayerTimelineScroll');
+const editorTextLayerTimeline = document.querySelector('#editorTextLayerTimeline');
 
 let selectedFiles = [];
 let previewUrls = [];
@@ -134,13 +145,20 @@ let currentEditor = null;
 let editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0 };
 let editorSegments = [];
 let selectedEditorSegmentIndex = 0;
-let editorTextState = { x: 50, y: 82, dragging: false, resizing: false, dragOffsetX: 0, dragOffsetY: 0, resizeStartX: 0, resizeStartY: 0, resizeStartSize: 42 };
+let editorSegmentSerial = 1;
+let editorTextState = { x: 50, y: 82, dragging: false, resizing: false, dragOffsetX: 0, dragOffsetY: 0, resizeStartX: 0, resizeStartY: 0, resizeStartSize: 42, resizeStartWidth: 42, resizeStartHeight: 16 };
+let editorTextLayers = [];
+let selectedEditorTextLayerId = null;
+let editorTextLayerSerial = 1;
+let editorTextTimelineDrag = null;
 let editorAudioObjectUrl = '';
 let editorZoom = 1;
 let editorUndoStack = [];
 let editorNativeSize = { width: 0, height: 0 };
 let draggedEditorSegmentIndex = null;
 let editorTimelineZoom = 1;
+let editorTimelineThumbnails = [];
+let editorTimelineThumbnailJobId = 0;
 let editorRenderTimer = null;
 let editorRenderProgress = 0;
 let editorRenderActive = false;
@@ -1091,10 +1109,12 @@ function initEditorEvents() {
   editorVideo.addEventListener('loadeddata', drawEditorFrame);
   editorVideo.addEventListener('timeupdate', () => {
     updateEditorPlayhead();
+    updateEditorTextOverlay();
     syncEditorAudioPreview(false);
   });
   editorVideo.addEventListener('seeked', () => {
     updateEditorPlayhead();
+    updateEditorTextOverlay();
     syncEditorAudioPreview(true);
   });
   editorVideo.addEventListener('play', playEditorAudioPreview);
@@ -1126,6 +1146,8 @@ function initEditorEvents() {
   editorTextFont.addEventListener('change', updateEditorTextOverlay);
   editorTextBackground.addEventListener('change', updateEditorTextOverlay);
   editorOverlayText.addEventListener('input', updateEditorTextOverlay);
+  editorAddTextLayer.addEventListener('click', () => addEditorTextLayer());
+  editorDeleteTextLayer.addEventListener('click', deleteSelectedEditorTextLayer);
   editorAudioMode.addEventListener('change', updateEditorAudioPreview);
   editorMuteOriginal.addEventListener('change', updateEditorAudioPreview);
   editorMusic.addEventListener('change', loadEditorAudioPreview);
@@ -1135,6 +1157,10 @@ function initEditorEvents() {
   editorTrimEndHandle.addEventListener('pointerdown', (event) => startTrimDrag(event, 'end'));
   editorTrimSelection.addEventListener('pointerdown', (event) => startTrimDrag(event, 'range'));
   editorTrimTrack.addEventListener('pointerdown', seekEditorFromTimeline);
+  editorTrimTrackScroll.addEventListener('wheel', zoomEditorTimelineFromWheel, { passive: false });
+  if (editorTextLayerTimelineScroll) {
+    editorTextLayerTimelineScroll.addEventListener('wheel', zoomEditorTimelineFromWheel, { passive: false });
+  }
   editorPlayPause.addEventListener('click', toggleEditorPlayback);
   editorUndo.addEventListener('click', undoEditorStep);
   editorZoomOut.addEventListener('click', () => {
@@ -1174,8 +1200,16 @@ function initEditorEvents() {
     submitVideoEdit();
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && editorModal.classList.contains('active')) {
+    if (!editorModal.classList.contains('active')) {
+      return;
+    }
+    if (event.key === 'Escape') {
       closeEditor();
+      return;
+    }
+    if ((event.key === ' ' || event.code === 'Space') && !isEditorTypingTarget(event.target)) {
+      event.preventDefault();
+      toggleEditorPlayback();
     }
   });
   window.addEventListener('resize', updateEditorFrameGuide);
@@ -1242,10 +1276,45 @@ function closeEditor() {
   updateEditorPlayPause();
 }
 
+function createEditorSegment(start, end, options = {}) {
+  const serial = Number.isFinite(Number(options.serial)) ? Number(options.serial) : editorSegmentSerial;
+  editorSegmentSerial = Math.max(editorSegmentSerial, serial + 1);
+  return {
+    id: options.id || `segment-${serial}`,
+    serial,
+    label: options.label || `Khúc ${serial}`,
+    start: roundTrimTime(start),
+    end: roundTrimTime(end)
+  };
+}
+
+function cloneEditorSegmentWithRange(segment, start, end) {
+  return {
+    ...segment,
+    start: roundTrimTime(start),
+    end: roundTrimTime(end)
+  };
+}
+
+function restoreEditorSegments(segments) {
+  editorSegmentSerial = 1;
+  editorSegments = (segments || []).map((segment) => createEditorSegment(segment.start, segment.end, {
+    id: segment.id,
+    serial: segment.serial,
+    label: segment.label
+  }));
+}
+
+function editorSegmentDuration(segment) {
+  return Math.max(0, Number(segment.end || 0) - Number(segment.start || 0));
+}
+
 function resetEditorTrim() {
   editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0 };
   editorSegments = [];
   selectedEditorSegmentIndex = 0;
+  editorSegmentSerial = 1;
+  resetEditorTimelineThumbnails();
   editorStart.value = '';
   editorEnd.value = '';
   updateEditorTrimUI();
@@ -1266,9 +1335,153 @@ function initializeEditorTrim() {
   editorTrim.duration = duration;
   editorTrim.start = 0;
   editorTrim.end = duration;
-  editorSegments = [{ start: 0, end: roundTrimTime(duration) }];
+  editorSegmentSerial = 1;
+  editorSegments = [createEditorSegment(0, duration)];
   selectedEditorSegmentIndex = 0;
   selectEditorSegment(0, 0);
+  generateEditorTimelineThumbnails();
+}
+
+function resetEditorTimelineThumbnails() {
+  editorTimelineThumbnailJobId += 1;
+  editorTimelineThumbnails = [];
+  renderEditorThumbnailStrip();
+}
+
+function renderEditorThumbnailStrip() {
+  if (!editorTimelineThumbs) {
+    return;
+  }
+  editorTimelineThumbs.innerHTML = '';
+  if (!editorTrim.duration) {
+    return;
+  }
+  if (!editorTimelineThumbnails.length) {
+    const skeletonCount = 10;
+    for (let index = 0; index < skeletonCount; index += 1) {
+      const item = document.createElement('span');
+      item.className = 'trim-thumbnail-skeleton';
+      editorTimelineThumbs.appendChild(item);
+    }
+    return;
+  }
+  editorTimelineThumbnails.forEach((thumbnail) => {
+    const image = document.createElement('img');
+    image.alt = '';
+    image.src = thumbnail.url;
+    editorTimelineThumbs.appendChild(image);
+  });
+}
+
+function generateEditorTimelineThumbnails() {
+  if (!editorTimelineThumbs || !editorTrim.duration || !editorVideo.src) {
+    return;
+  }
+  const source = editorVideo.currentSrc || editorVideo.src;
+  const duration = editorTrim.duration;
+  const jobId = editorTimelineThumbnailJobId + 1;
+  editorTimelineThumbnailJobId = jobId;
+  editorTimelineThumbnails = [];
+  renderEditorThumbnailStrip();
+
+  captureEditorTimelineThumbnails(source, duration, jobId).catch(() => {
+    if (jobId === editorTimelineThumbnailJobId) {
+      editorTimelineThumbnails = [];
+      renderEditorThumbnailStrip();
+    }
+  });
+}
+
+async function captureEditorTimelineThumbnails(source, duration, jobId) {
+  const video = document.createElement('video');
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return;
+  }
+  canvas.width = 160;
+  canvas.height = 90;
+  video.muted = true;
+  video.preload = 'auto';
+  video.playsInline = true;
+  video.src = source;
+  video.load();
+  await waitForEditorMediaEvent(video, 'loadedmetadata', 2500);
+
+  const viewportWidth = editorTrimTrackScroll ? editorTrimTrackScroll.clientWidth : 900;
+  const count = Math.max(8, Math.min(18, Math.ceil((viewportWidth || 900) / 90)));
+  const thumbnails = [];
+
+  for (let index = 0; index < count; index += 1) {
+    if (jobId !== editorTimelineThumbnailJobId) {
+      break;
+    }
+    const time = Math.min(Math.max(0.05, duration * ((index + 0.5) / count)), Math.max(0.05, duration - 0.05));
+    await seekEditorThumbnailVideo(video, time);
+    if (jobId !== editorTimelineThumbnailJobId) {
+      break;
+    }
+    drawEditorThumbnailFrame(context, video, canvas.width, canvas.height);
+    thumbnails.push({ time, url: canvas.toDataURL('image/jpeg', 0.68) });
+    editorTimelineThumbnails = thumbnails.slice();
+    renderEditorThumbnailStrip();
+    renderEditorSegments();
+    renderEditorSegmentOrder();
+  }
+
+  video.removeAttribute('src');
+  video.load();
+}
+
+function waitForEditorMediaEvent(element, eventName, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      element.removeEventListener(eventName, onEvent);
+      element.removeEventListener('error', onEvent);
+      window.clearTimeout(timer);
+    };
+    const onEvent = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const timer = window.setTimeout(onEvent, timeoutMs);
+    element.addEventListener(eventName, onEvent, { once: true });
+    element.addEventListener('error', onEvent, { once: true });
+  });
+}
+
+async function seekEditorThumbnailVideo(video, time) {
+  const safeTime = Math.max(0, Number(time || 0));
+  video.currentTime = safeTime;
+  await waitForEditorMediaEvent(video, 'seeked', 1800);
+}
+
+function drawEditorThumbnailFrame(context, video, width, height) {
+  const sourceWidth = video.videoWidth || width;
+  const sourceHeight = video.videoHeight || height;
+  const sourceRatio = sourceWidth / sourceHeight;
+  const targetRatio = width / height;
+  let sx = 0;
+  let sy = 0;
+  let sw = sourceWidth;
+  let sh = sourceHeight;
+
+  if (sourceRatio > targetRatio) {
+    sw = sourceHeight * targetRatio;
+    sx = (sourceWidth - sw) / 2;
+  } else {
+    sh = sourceWidth / targetRatio;
+    sy = (sourceHeight - sh) / 2;
+  }
+
+  context.fillStyle = '#111827';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
 }
 
 function syncEditorTrimFromFields() {
@@ -1358,7 +1571,11 @@ function setEditorTrim(start, end, seekToStart) {
   editorTrim.start = roundTrimTime(safeStart);
   editorTrim.end = roundTrimTime(safeEnd);
   if (editorSegments[selectedEditorSegmentIndex]) {
-    editorSegments[selectedEditorSegmentIndex] = { start: editorTrim.start, end: editorTrim.end };
+    editorSegments[selectedEditorSegmentIndex] = cloneEditorSegmentWithRange(
+      editorSegments[selectedEditorSegmentIndex],
+      editorTrim.start,
+      editorTrim.end
+    );
   }
   editorStart.value = formatTrimInput(editorTrim.start);
   editorEnd.value = formatTrimInput(editorTrim.end);
@@ -1381,9 +1598,29 @@ function updateEditorTrimUI() {
   editorTrimEndHandle.style.left = `${endRatio * 100}%`;
   editorTrimStartLabel.textContent = formatTimelineTime(editorTrim.start);
   editorTrimEndLabel.textContent = formatTimelineTime(editorTrim.end);
-  const segmentLabel = editorSegments.length ? `Đoạn ${selectedEditorSegmentIndex + 1}/${editorSegments.length}` : 'Đoạn đã chọn';
+  const selectedSegment = editorSegments[selectedEditorSegmentIndex];
+  const segmentLabel = selectedSegment
+    ? `${selectedSegment.label || `Khúc ${selectedEditorSegmentIndex + 1}`} | Xuất ${selectedEditorSegmentIndex + 1}/${editorSegments.length}`
+    : 'Đoạn đã chọn';
   editorTrimDurationLabel.textContent = `${segmentLabel}: ${formatTimelineTime(Math.max(0, editorTrim.end - editorTrim.start))}`;
   updateEditorPlayhead();
+}
+
+function editorThumbnailForSegment(segment) {
+  if (!editorTimelineThumbnails.length || !editorTrim.duration || !segment) {
+    return '';
+  }
+  const midpoint = (Number(segment.start || 0) + Number(segment.end || 0)) / 2;
+  let closest = editorTimelineThumbnails[0];
+  let closestDistance = Math.abs(midpoint - closest.time);
+  editorTimelineThumbnails.forEach((thumbnail) => {
+    const distance = Math.abs(midpoint - thumbnail.time);
+    if (distance < closestDistance) {
+      closest = thumbnail;
+      closestDistance = distance;
+    }
+  });
+  return closest ? closest.url : '';
 }
 
 function renderEditorSegments() {
@@ -1402,7 +1639,8 @@ function renderEditorSegments() {
           index,
           duration,
           active: index === selectedEditorSegmentIndex,
-          formatTime: formatTimelineTime
+          formatTime: formatTimelineTime,
+          thumbnailUrl: editorThumbnailForSegment(segment)
         })
       : document.createElement('button');
     button.addEventListener('click', (event) => {
@@ -1428,10 +1666,12 @@ function renderEditorSegmentOrder() {
           segment,
           index,
           active: index === selectedEditorSegmentIndex,
-          formatTime: formatTimelineTime
+          formatTime: formatTimelineTime,
+          thumbnailUrl: editorThumbnailForSegment(segment)
         })
       : document.createElement('button');
     button.addEventListener('click', () => selectEditorSegment(index, segment.start));
+    button.style.flexGrow = String(Math.max(0.4, editorSegmentDuration(segment)));
     wireEditorSegmentDrag(button, index);
     editorSegmentOrderList.appendChild(button);
   });
@@ -1473,7 +1713,7 @@ function reorderEditorSegment(from, to) {
   editorSegments.splice(to, 0, segment);
   selectedEditorSegmentIndex = to;
   selectEditorSegment(to, segment.start, true);
-  setEditorStatus(`Đã đổi thứ tự xuất: khúc ${from + 1} sang vị trí ${to + 1}.`, 'ok');
+  setEditorStatus(`Đã đưa ${segment.label || `khúc ${from + 1}`} sang vị trí xuất ${to + 1}. Tên khúc và thời lượng được giữ nguyên.`, 'ok');
 }
 
 function segmentIndexAtTime(time) {
@@ -1557,14 +1797,16 @@ function splitEditorAtPlayhead() {
     setEditorStatus('Đưa đầu phát vào giữa đoạn cần tách rồi bấm tách.', 'error');
     return;
   }
+  const leftSegment = cloneEditorSegmentWithRange(segment, segment.start, time);
+  const rightSegment = createEditorSegment(time, segment.end);
   editorSegments.splice(
     selectedEditorSegmentIndex,
     1,
-    { start: roundTrimTime(segment.start), end: time },
-    { start: time, end: roundTrimTime(segment.end) }
+    leftSegment,
+    rightSegment
   );
   selectEditorSegment(selectedEditorSegmentIndex, time, false);
-  setEditorStatus(`Đã tách thành ${editorSegments.length} khúc. Nếu vừa tách cuối đoạn cần bỏ, bấm xóa sẽ xóa khúc bên trái đầu phát.`, 'ok');
+  setEditorStatus(`Đã tách ${segment.label || 'khúc đã chọn'} thành ${leftSegment.label} và ${rightSegment.label}.`, 'ok');
 }
 
 function deleteSelectedEditorSegment() {
@@ -1573,14 +1815,11 @@ function deleteSelectedEditorSegment() {
     return;
   }
   pushEditorUndo();
-  const playheadIndex = segmentIndexAtTime(editorVideo.currentTime || 0);
-  if (playheadIndex >= 0) {
-    selectedEditorSegmentIndex = playheadIndex;
-  }
+  const removedSegment = editorSegments[selectedEditorSegmentIndex];
   editorSegments.splice(selectedEditorSegmentIndex, 1);
   selectedEditorSegmentIndex = Math.min(selectedEditorSegmentIndex, editorSegments.length - 1);
   selectEditorSegment(selectedEditorSegmentIndex);
-  setEditorStatus(`Đã xóa khúc khỏi bản xuất. Còn ${editorSegments.length} khúc sẽ được ghép khi lưu.`, 'ok');
+  setEditorStatus(`Đã xóa ${removedSegment && removedSegment.label ? removedSegment.label : 'khúc đã chọn'}. Các khúc còn lại sẽ nối sát nhau theo thứ tự xuất khi lưu.`, 'ok');
 }
 
 function resetEditorSegments() {
@@ -1588,7 +1827,8 @@ function resetEditorSegments() {
     return;
   }
   pushEditorUndo();
-  editorSegments = [{ start: 0, end: roundTrimTime(editorTrim.duration) }];
+  editorSegmentSerial = 1;
+  editorSegments = [createEditorSegment(0, editorTrim.duration)];
   selectedEditorSegmentIndex = 0;
   selectEditorSegment(0, 0);
   setEditorStatus('Đã khôi phục timeline ban đầu.', 'ok');
@@ -1596,7 +1836,13 @@ function resetEditorSegments() {
 
 function editorSnapshot() {
   return {
-    segments: editorSegments.map((segment) => ({ start: segment.start, end: segment.end })),
+    segments: editorSegments.map((segment) => ({
+      id: segment.id,
+      serial: segment.serial,
+      label: segment.label,
+      start: segment.start,
+      end: segment.end
+    })),
     selectedIndex: selectedEditorSegmentIndex,
     currentTime: Number(editorVideo.currentTime || 0),
     trim: { start: editorTrim.start, end: editorTrim.end },
@@ -1607,6 +1853,9 @@ function editorSnapshot() {
     textHorizontal: editorTextHorizontal.value,
     textPosition: editorTextPosition.value,
     textState: { ...editorTextState },
+    textLayers: editorTextLayers.map((layer) => ({ ...layer })),
+    selectedTextLayerId: selectedEditorTextLayerId,
+    textLayerSerial: editorTextLayerSerial,
     textSize: editorTextSize.value,
     textColor: editorTextColor.value,
     textFont: editorTextFont.value,
@@ -1640,9 +1889,12 @@ function undoEditorStep() {
     updateEditorUndoButton();
     return;
   }
-  editorSegments = snapshot.segments.map((segment) => ({ start: segment.start, end: segment.end }));
+  restoreEditorSegments(snapshot.segments);
   selectedEditorSegmentIndex = Math.max(0, Math.min(editorSegments.length - 1, snapshot.selectedIndex || 0));
   editorTextState = { ...snapshot.textState };
+  editorTextLayers = (snapshot.textLayers || []).map((layer) => ({ ...layer }));
+  selectedEditorTextLayerId = snapshot.selectedTextLayerId || (editorTextLayers[0] ? editorTextLayers[0].id : null);
+  editorTextLayerSerial = snapshot.textLayerSerial || (editorTextLayers.length + 1);
   editorTextHorizontal.value = snapshot.textHorizontal || 'center';
   editorTextPosition.value = snapshot.textPosition || 'center';
   editorTextSize.value = snapshot.textSize;
@@ -1650,6 +1902,9 @@ function undoEditorStep() {
   editorTextFont.value = snapshot.textFont || 'arial';
   editorTextBackground.value = snapshot.textBackground || 'dark';
   editorOverlayText.value = snapshot.overlayText || '';
+  if (editorTextLayers.length) {
+    syncEditorTextControlsFromLayer();
+  }
   editorRotation.value = snapshot.rotation || '0';
   editorAspectRatio.value = snapshot.aspectRatio || 'keep';
   updateEditorResolutionOptions(snapshot.outputResolution || '');
@@ -1694,6 +1949,38 @@ function trimTimeFromPointer(event) {
   const rect = editorTrimTrack.getBoundingClientRect();
   const ratio = rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
   return ratio * (editorTrim.duration || 0);
+}
+
+function zoomEditorTimelineFromWheel(event) {
+  if (!editorTrim.duration || !editorTrimTrackScroll || !editorTrimTrack) {
+    return;
+  }
+  event.preventDefault();
+  const trackRect = editorTrimTrack.getBoundingClientRect();
+  const scrollRect = editorTrimTrackScroll.getBoundingClientRect();
+  const pointerRatio = trackRect.width
+    ? Math.max(0, Math.min(1, (event.clientX - trackRect.left) / trackRect.width))
+    : 0;
+  const pointerViewportX = event.clientX - scrollRect.left;
+  const timeAtPointer = pointerRatio * editorTrim.duration;
+  const wheelStep = event.deltaY < 0 ? 0.5 : -0.5;
+  const nextZoom = editorTimelineZoom + wheelStep;
+
+  setEditorTimelineZoom(nextZoom);
+
+  requestAnimationFrame(() => {
+    const nextRect = editorTrimTrack.getBoundingClientRect();
+    const nextX = (timeAtPointer / editorTrim.duration) * nextRect.width;
+    editorTrimTrackScroll.scrollLeft = Math.max(0, nextX - pointerViewportX);
+  });
+}
+
+function isEditorTypingTarget(target) {
+  if (!target) {
+    return false;
+  }
+  const tagName = target.tagName ? target.tagName.toLowerCase() : '';
+  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select' || tagName === 'button';
 }
 
 function parseTrimNumber(value, fallback) {
@@ -1810,6 +2097,9 @@ function setEditorZoom(value) {
 function setEditorTimelineZoom(value) {
   editorTimelineZoom = Math.max(1, Math.min(12, Number(value || 1)));
   editorTrimTrack.style.setProperty('--timeline-zoom', editorTimelineZoom);
+  if (editorTextLayerTimeline) {
+    editorTextLayerTimeline.style.setProperty('--timeline-zoom', editorTimelineZoom);
+  }
   editorTimelineZoomValue.textContent = `${Math.round(editorTimelineZoom * 100)}%`;
 }
 
@@ -1987,6 +2277,442 @@ function stopEditorTextResize() {
   updateEditorTextOverlay();
 }
 
+function editorOutputDuration() {
+  const segmentsDuration = editorSegments.reduce((sum, segment) => sum + editorSegmentDuration(segment), 0);
+  return Math.max(0, segmentsDuration || editorTrim.duration || Number(editorVideo.duration || 0));
+}
+
+function editorCurrentOutputTime() {
+  const sourceTime = Number(editorVideo.currentTime || 0);
+  let outputTime = 0;
+  for (let index = 0; index < editorSegments.length; index += 1) {
+    const segment = editorSegments[index];
+    const duration = editorSegmentDuration(segment);
+    if (sourceTime >= segment.start && sourceTime <= segment.end) {
+      return outputTime + Math.max(0, Math.min(duration, sourceTime - segment.start));
+    }
+    if (index === selectedEditorSegmentIndex) {
+      return outputTime + Math.max(0, Math.min(duration, sourceTime - segment.start));
+    }
+    outputTime += duration;
+  }
+  return Math.max(0, Math.min(editorOutputDuration(), sourceTime));
+}
+
+function selectedEditorTextLayer() {
+  return editorTextLayers.find((layer) => layer.id === selectedEditorTextLayerId) || null;
+}
+
+function createEditorTextLayer(options = {}) {
+  const duration = Math.max(0.2, editorOutputDuration() || editorTrim.duration || 0.2);
+  const start = Math.max(0, Math.min(duration - 0.1, Number(options.start ?? editorCurrentOutputTime() ?? 0)));
+  const end = Math.max(start + 0.5, Math.min(duration, Number(options.end ?? start + Math.min(3, duration))));
+  const serial = editorTextLayerSerial++;
+  return {
+    id: options.id || `text-layer-${serial}`,
+    serial,
+    label: options.label || `Text ${serial}`,
+    text: options.text ?? '',
+    x: Number.isFinite(Number(options.x)) ? Number(options.x) : 50,
+    y: Number.isFinite(Number(options.y)) ? Number(options.y) : 82,
+    start: roundTrimTime(start),
+    end: roundTrimTime(end),
+    width: Number.isFinite(Number(options.width)) ? Number(options.width) : 42,
+    height: Number.isFinite(Number(options.height)) ? Number(options.height) : 16,
+    size: String(options.size || editorTextSize.value || '42'),
+    color: options.color || editorTextColor.value || '#ffffff',
+    font: options.font || editorTextFont.value || 'arial',
+    background: options.background || editorTextBackground.value || 'dark',
+    horizontal: options.horizontal || editorTextHorizontal.value || 'center',
+    vertical: options.vertical || editorTextPosition.value || 'center'
+  };
+}
+
+function addEditorTextLayer(options = {}) {
+  pushEditorUndo();
+  const layer = createEditorTextLayer({
+    text: options.text ?? '',
+    size: editorTextSize.value,
+    color: editorTextColor.value,
+    font: editorTextFont.value,
+    background: editorTextBackground.value,
+    horizontal: editorTextHorizontal.value,
+    vertical: editorTextPosition.value
+  });
+  editorTextLayers.push(layer);
+  selectEditorTextLayer(layer.id);
+  renderEditorTextLayerTimeline();
+  setEditorStatus(`Đã thêm ${layer.label}. Kéo text trên video để đặt vị trí, kéo thanh text timeline để đặt thời gian.`, 'ok');
+}
+
+function deleteSelectedEditorTextLayer() {
+  const layer = selectedEditorTextLayer();
+  if (!layer) {
+    setEditorStatus('Chưa có text nào để xóa.', 'error');
+    return;
+  }
+  pushEditorUndo();
+  editorTextLayers = editorTextLayers.filter((item) => item.id !== layer.id);
+  selectedEditorTextLayerId = editorTextLayers.length ? editorTextLayers[Math.max(0, Math.min(editorTextLayers.length - 1, layer.serial - 1))].id : null;
+  syncEditorTextControlsFromLayer();
+  updateEditorTextOverlay();
+  setEditorStatus(`Đã xóa ${layer.label}.`, 'ok');
+}
+
+function selectEditorTextLayer(id) {
+  selectedEditorTextLayerId = id;
+  syncEditorTextControlsFromLayer();
+  updateEditorTextOverlay();
+}
+
+function syncEditorTextControlsFromLayer() {
+  const layer = selectedEditorTextLayer();
+  if (!layer) {
+    editorOverlayText.value = '';
+    editorTextState = { x: 50, y: 82, dragging: false, resizing: false, dragOffsetX: 0, dragOffsetY: 0, resizeStartX: 0, resizeStartY: 0, resizeStartSize: 42, resizeStartWidth: 42, resizeStartHeight: 16 };
+    return;
+  }
+  editorOverlayText.value = layer.text || '';
+  editorTextHorizontal.value = layer.horizontal || 'center';
+  editorTextPosition.value = layer.vertical || 'center';
+  editorTextSize.value = layer.size || '42';
+  editorTextColor.value = layer.color || '#ffffff';
+  editorTextFont.value = layer.font || 'arial';
+  editorTextBackground.value = layer.background || 'dark';
+  editorTextState = {
+    x: layer.x,
+    y: layer.y,
+    dragging: false,
+    resizing: false,
+    dragOffsetX: 0,
+    dragOffsetY: 0,
+    resizeStartX: 0,
+    resizeStartY: 0,
+    resizeStartSize: Number(layer.size || 42),
+    resizeStartWidth: Number(layer.width || 42),
+    resizeStartHeight: Number(layer.height || 16)
+  };
+}
+
+function syncSelectedEditorTextLayerFromControls() {
+  let layer = selectedEditorTextLayer();
+  const typedText = editorOverlayText.value.trim();
+  if (!layer && typedText) {
+    layer = createEditorTextLayer({ text: typedText });
+    editorTextLayers.push(layer);
+    selectedEditorTextLayerId = layer.id;
+  }
+  if (!layer) {
+    return null;
+  }
+  layer.text = editorOverlayText.value;
+  layer.horizontal = editorTextHorizontal.value || 'center';
+  layer.vertical = editorTextPosition.value || 'center';
+  layer.size = editorTextSize.value || '42';
+  layer.color = editorTextColor.value || '#ffffff';
+  layer.font = editorTextFont.value || 'arial';
+  layer.background = editorTextBackground.value || 'dark';
+  layer.width = Math.max(4, Math.min(100, Number(layer.width || 42)));
+  layer.height = Math.max(4, Math.min(100, Number(layer.height || 16)));
+  layer.x = Math.max(0, Math.min(100, Number(editorTextState.x || 0)));
+  layer.y = Math.max(0, Math.min(100, Number(editorTextState.y || 0)));
+  clampEditorTextLayer(layer);
+  return layer;
+}
+
+function clampEditorTextLayer(layer) {
+  const duration = Math.max(0.2, editorOutputDuration() || 0.2);
+  layer.start = roundTrimTime(Math.max(0, Math.min(duration - 0.1, Number(layer.start || 0))));
+  layer.end = roundTrimTime(Math.max(layer.start + 0.1, Math.min(duration, Number(layer.end || duration))));
+}
+
+function resetEditorTextOverlay() {
+  editorTextLayers = [];
+  selectedEditorTextLayerId = null;
+  editorTextLayerSerial = 1;
+  editorTextTimelineDrag = null;
+  editorOverlayText.value = '';
+  editorTextState = { x: 50, y: 82, dragging: false, resizing: false, dragOffsetX: 0, dragOffsetY: 0, resizeStartX: 0, resizeStartY: 0, resizeStartSize: 42, resizeStartWidth: 42, resizeStartHeight: 16 };
+  updateEditorTextOverlay();
+}
+
+function updateEditorTextOverlay() {
+  const selectedLayer = syncSelectedEditorTextLayerFromControls();
+  renderEditorSelectedTextOverlay(selectedLayer);
+  renderEditorGhostTextLayers(selectedLayer);
+  renderEditorTextLayerTimeline();
+}
+
+function renderEditorSelectedTextOverlay(layer) {
+  if (!layer || !layer.text.trim()) {
+    editorTextContent.textContent = '';
+    editorTextOverlay.classList.remove('active', 'selected', 'dragging');
+    editorTextOverlay.style.display = '';
+    editorTextOverlay.style.width = '';
+    editorTextOverlay.style.height = '';
+    return;
+  }
+  editorTextContent.textContent = layer.text;
+  applyEditorTextElement(editorTextOverlay, layer, true);
+  editorTextOverlay.classList.add('active', 'selected');
+  editorTextOverlay.classList.toggle('dragging', editorTextState.dragging || editorTextState.resizing);
+}
+
+function renderEditorGhostTextLayers(selectedLayer) {
+  if (!editorTextLayerCanvas) {
+    return;
+  }
+  editorTextLayerCanvas.innerHTML = '';
+  const currentTime = editorCurrentOutputTime();
+  editorTextLayers.forEach((layer) => {
+    if (!layer.text.trim() || (selectedLayer && layer.id === selectedLayer.id) || currentTime < layer.start || currentTime > layer.end) {
+      return;
+    }
+    const ghost = document.createElement('div');
+    ghost.className = 'editor-text-overlay ghost active';
+    const content = document.createElement('span');
+    content.textContent = layer.text;
+    ghost.appendChild(content);
+    applyEditorTextElement(ghost, layer, false);
+    editorTextLayerCanvas.appendChild(ghost);
+  });
+}
+
+function applyEditorTextElement(element, layer, selected) {
+  element.classList.remove('text-bg-none', 'text-bg-outline', 'text-bg-light', 'text-bg-highlight');
+  const background = layer.background || 'dark';
+  if (background !== 'dark') {
+    element.classList.add(`text-bg-${background}`);
+  }
+  element.style.fontFamily = editorFontFamily(layer.font);
+  element.style.fontSize = `${Math.max(18, Math.min(160, Number(layer.size || 42)))}px`;
+  element.style.color = layer.color || '#ffffff';
+  element.style.textAlign = layer.horizontal || 'center';
+  element.style.justifyContent = textVerticalJustify(layer.vertical);
+  element.style.setProperty('--text-x', 0);
+  element.style.setProperty('--text-y', 0);
+  element.style.transform = 'none';
+  element.style.display = 'flex';
+  const metrics = editorFrameMetrics();
+  const width = Math.max(48, (metrics.width || 0) * (Math.max(4, Math.min(100, Number(layer.width || 42))) / 100));
+  const height = Math.max(32, (metrics.height || 0) * (Math.max(4, Math.min(100, Number(layer.height || 16))) / 100));
+  element.style.width = `${width}px`;
+  element.style.height = `${height}px`;
+  positionEditorTextElement(element, layer);
+  if (selected) {
+    element.classList.add('selected');
+  }
+}
+
+function positionEditorTextElement(element, layer) {
+  const metrics = editorFrameMetrics();
+  if (!metrics.width || !metrics.height) {
+    return;
+  }
+  const boxWidth = element.offsetWidth || 0;
+  const boxHeight = element.offsetHeight || 0;
+  const availableWidth = Math.max(1, metrics.width - boxWidth);
+  const availableHeight = Math.max(1, metrics.height - boxHeight);
+  const left = metrics.left + (Math.max(0, Math.min(100, Number(layer.x || 0))) / 100) * availableWidth;
+  const top = metrics.top + (Math.max(0, Math.min(100, Number(layer.y || 0))) / 100) * availableHeight;
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+}
+
+function renderEditorTextLayerTimeline() {
+  if (!editorTextLayerTimeline) {
+    return;
+  }
+  const duration = Math.max(0.2, editorOutputDuration() || 0.2);
+  editorTextLayerTimeline.style.setProperty('--timeline-zoom', editorTimelineZoom);
+  editorTextLayerTimeline.innerHTML = '';
+  const playhead = document.createElement('div');
+  playhead.className = 'text-layer-playhead';
+  playhead.style.left = `${(editorCurrentOutputTime() / duration) * 100}%`;
+  editorTextLayerTimeline.appendChild(playhead);
+  editorTextLayers.forEach((layer) => {
+    clampEditorTextLayer(layer);
+    const row = document.createElement('div');
+    row.className = 'text-layer-row';
+    const bar = document.createElement('button');
+    bar.type = 'button';
+    bar.className = `text-layer-bar${layer.id === selectedEditorTextLayerId ? ' active' : ''}`;
+    bar.dataset.layerId = layer.id;
+    bar.style.left = `${(layer.start / duration) * 100}%`;
+    bar.style.width = `${Math.max(1, ((layer.end - layer.start) / duration) * 100)}%`;
+    bar.textContent = `${layer.label}: ${layer.text.trim() || 'Text'}`;
+    bar.title = `${layer.label}: ${formatTimelineTime(layer.start)} - ${formatTimelineTime(layer.end)}`;
+    const startHandle = document.createElement('span');
+    startHandle.className = 'text-layer-handle start';
+    startHandle.dataset.mode = 'start';
+    const endHandle = document.createElement('span');
+    endHandle.className = 'text-layer-handle end';
+    endHandle.dataset.mode = 'end';
+    bar.append(startHandle, endHandle);
+    bar.addEventListener('click', () => selectEditorTextLayer(layer.id));
+    bar.addEventListener('pointerdown', startEditorTextTimelineDrag);
+    row.appendChild(bar);
+    editorTextLayerTimeline.appendChild(row);
+  });
+}
+
+function startEditorTextTimelineDrag(event) {
+  const bar = event.target.closest ? event.target.closest('.text-layer-bar') : null;
+  if (!bar) {
+    return;
+  }
+  const layer = editorTextLayers.find((item) => item.id === bar.dataset.layerId);
+  if (!layer) {
+    return;
+  }
+  pushEditorUndo();
+  event.preventDefault();
+  event.stopPropagation();
+  selectEditorTextLayer(layer.id);
+  const mode = event.target.dataset.mode || 'move';
+  const pointerTime = textLayerTimeFromPointer(event);
+  editorTextTimelineDrag = {
+    id: layer.id,
+    mode,
+    offset: pointerTime - layer.start,
+    duration: layer.end - layer.start
+  };
+  bar.setPointerCapture(event.pointerId);
+  bar.addEventListener('pointermove', dragEditorTextTimeline);
+  bar.addEventListener('pointerup', stopEditorTextTimelineDrag, { once: true });
+  bar.addEventListener('pointercancel', stopEditorTextTimelineDrag, { once: true });
+}
+
+function dragEditorTextTimeline(event) {
+  if (!editorTextTimelineDrag) {
+    return;
+  }
+  const layer = editorTextLayers.find((item) => item.id === editorTextTimelineDrag.id);
+  if (!layer) {
+    return;
+  }
+  const duration = Math.max(0.2, editorOutputDuration() || 0.2);
+  const minLength = Math.min(0.2, duration);
+  const time = textLayerTimeFromPointer(event);
+  if (editorTextTimelineDrag.mode === 'start') {
+    layer.start = roundTrimTime(Math.max(0, Math.min(layer.end - minLength, time)));
+  } else if (editorTextTimelineDrag.mode === 'end') {
+    layer.end = roundTrimTime(Math.max(layer.start + minLength, Math.min(duration, time)));
+  } else {
+    let start = time - editorTextTimelineDrag.offset;
+    start = Math.max(0, Math.min(duration - editorTextTimelineDrag.duration, start));
+    layer.start = roundTrimTime(start);
+    layer.end = roundTrimTime(start + editorTextTimelineDrag.duration);
+  }
+  renderEditorTextLayerTimeline();
+}
+
+function stopEditorTextTimelineDrag(event) {
+  const bar = event.currentTarget;
+  editorTextTimelineDrag = null;
+  if (bar) {
+    bar.removeEventListener('pointermove', dragEditorTextTimeline);
+  }
+  updateEditorTextOverlay();
+}
+
+function textLayerTimeFromPointer(event) {
+  const duration = Math.max(0.2, editorOutputDuration() || 0.2);
+  const rect = editorTextLayerTimeline.getBoundingClientRect();
+  const ratio = rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
+  return ratio * duration;
+}
+
+function applyEditorTextPreset() {
+  updateEditorTextOverlay();
+}
+
+function startEditorTextDrag(event) {
+  const layer = selectedEditorTextLayer();
+  if (!layer || !layer.text.trim()) {
+    return;
+  }
+  pushEditorUndo();
+  event.preventDefault();
+  event.stopPropagation();
+  const metrics = editorFrameMetrics();
+  const rect = editorTextOverlay.getBoundingClientRect();
+  const stageRect = editorStage.getBoundingClientRect();
+  const left = stageRect.left + metrics.left + (layer.x / 100) * Math.max(1, metrics.width - rect.width);
+  const top = stageRect.top + metrics.top + (layer.y / 100) * Math.max(1, metrics.height - rect.height);
+  editorTextState.dragOffsetX = event.clientX - left;
+  editorTextState.dragOffsetY = event.clientY - top;
+  editorTextState.dragging = true;
+  editorTextOverlay.setPointerCapture(event.pointerId);
+  editorTextOverlay.addEventListener('pointermove', dragEditorText);
+  editorTextOverlay.addEventListener('pointerup', stopEditorTextDrag, { once: true });
+  editorTextOverlay.addEventListener('pointercancel', stopEditorTextDrag, { once: true });
+}
+
+function dragEditorText(event) {
+  const layer = selectedEditorTextLayer();
+  if (!layer || !editorTextState.dragging) {
+    return;
+  }
+  const stageRect = editorStage.getBoundingClientRect();
+  const metrics = editorFrameMetrics();
+  const rect = editorTextOverlay.getBoundingClientRect();
+  const availableWidth = Math.max(1, metrics.width - rect.width);
+  const availableHeight = Math.max(1, metrics.height - rect.height);
+  const left = event.clientX - editorTextState.dragOffsetX - stageRect.left - metrics.left;
+  const top = event.clientY - editorTextState.dragOffsetY - stageRect.top - metrics.top;
+  layer.x = editorTextState.x = Math.max(0, Math.min(100, (left / availableWidth) * 100));
+  layer.y = editorTextState.y = Math.max(0, Math.min(100, (top / availableHeight) * 100));
+  updateEditorTextOverlay();
+}
+
+function stopEditorTextDrag() {
+  editorTextState.dragging = false;
+  editorTextOverlay.removeEventListener('pointermove', dragEditorText);
+  updateEditorTextOverlay();
+}
+
+function startEditorTextResize(event) {
+  const layer = selectedEditorTextLayer();
+  if (!layer || !layer.text.trim()) {
+    return;
+  }
+  pushEditorUndo();
+  event.preventDefault();
+  event.stopPropagation();
+  editorTextState.resizing = true;
+  editorTextState.resizeStartX = event.clientX;
+  editorTextState.resizeStartY = event.clientY;
+  editorTextState.resizeStartWidth = Math.max(4, Math.min(100, Number(layer.width || 42)));
+  editorTextState.resizeStartHeight = Math.max(4, Math.min(100, Number(layer.height || 16)));
+  editorTextResize.setPointerCapture(event.pointerId);
+  editorTextResize.addEventListener('pointermove', resizeEditorText);
+  editorTextResize.addEventListener('pointerup', stopEditorTextResize, { once: true });
+  editorTextResize.addEventListener('pointercancel', stopEditorTextResize, { once: true });
+}
+
+function resizeEditorText(event) {
+  const layer = selectedEditorTextLayer();
+  if (!layer || !editorTextState.resizing) {
+    return;
+  }
+  const metrics = editorFrameMetrics();
+  if (!metrics.width || !metrics.height) {
+    return;
+  }
+  const deltaX = ((event.clientX - editorTextState.resizeStartX) / metrics.width) * 100;
+  const deltaY = ((event.clientY - editorTextState.resizeStartY) / metrics.height) * 100;
+  layer.width = Math.max(4, Math.min(100, editorTextState.resizeStartWidth + deltaX));
+  layer.height = Math.max(4, Math.min(100, editorTextState.resizeStartHeight + deltaY));
+  updateEditorTextOverlay();
+}
+
+function stopEditorTextResize() {
+  editorTextState.resizing = false;
+  editorTextResize.removeEventListener('pointermove', resizeEditorText);
+  updateEditorTextOverlay();
+}
+
 function drawEditorFrame() {
   updateEditorRotationPreview();
   updateEditorTextOverlay();
@@ -2109,22 +2835,30 @@ async function submitVideoEdit() {
       appendEditField(data, 'outputWidth', outputSize.width);
       appendEditField(data, 'outputHeight', outputSize.height);
     }
-    appendEditField(data, 'textPosition', editorTextPosition.value);
-    const textPosition = editorTextOutputPosition();
-    appendEditField(data, 'textXPercent', textPosition.x.toFixed(2));
-    appendEditField(data, 'textYPercent', textPosition.y.toFixed(2));
-    appendEditField(data, 'textSize', editorTextSize.value);
-    appendEditField(data, 'textColor', editorTextColor.value);
-    appendEditField(data, 'textFont', editorTextFont.value);
-    appendEditField(data, 'textBackground', editorTextBackground.value);
-    appendEditField(data, 'overlayText', editorOverlayText.value.trim());
     appendEditField(data, 'audioMode', editorAudioMode.value);
     appendEditField(data, 'muteOriginalAudio', editorMuteOriginal.checked ? 'true' : 'false');
     appendEditField(data, 'title', editorTitleInput.value.trim());
     setEditorRenderProgress(10, 'Đang dựng text, vị trí, zoom và khung xuất...');
-    const textOverlay = await createEditorTextOverlayBlob();
-    if (textOverlay) {
-      data.append('textOverlay', textOverlay, 'text-overlay.png');
+    syncSelectedEditorTextLayerFromControls();
+    editorTextLayers.forEach(clampEditorTextLayer);
+    const textLayerPayload = [];
+    const activeTextLayers = editorTextLayers.filter((layer) => layer.text && layer.text.trim() && layer.end > layer.start);
+    for (let index = 0; index < activeTextLayers.length; index += 1) {
+      const layer = activeTextLayers[index];
+      const textOverlay = await createEditorTextOverlayBlob(layer);
+      if (!textOverlay) {
+        continue;
+      }
+      textLayerPayload.push({
+        startSeconds: roundTrimTime(layer.start),
+        endSeconds: roundTrimTime(layer.end),
+        textXPercent: Math.max(0, Math.min(100, Number(layer.x || 0))),
+        textYPercent: Math.max(0, Math.min(100, Number(layer.y || 0)))
+      });
+      data.append('textLayerOverlays', textOverlay, `text-layer-${index + 1}.png`);
+    }
+    if (textLayerPayload.length) {
+      data.append('textLayersJson', JSON.stringify(textLayerPayload));
     }
     if (editorSegments.length) {
       data.append('segmentsJson', JSON.stringify(editorSegments.map((segment) => ({
@@ -2167,40 +2901,42 @@ async function submitVideoEdit() {
   }
 }
 
-function createEditorTextOverlayBlob() {
-  const text = editorOverlayText.value.trim();
+function createEditorTextOverlayBlob(layer = selectedEditorTextLayer()) {
+  const text = layer && layer.text ? layer.text.trim() : '';
   if (!text) {
     return Promise.resolve(null);
   }
   const metrics = editorFrameMetrics();
   const outputSize = parseEditorOutputResolution() || editorNativeSize;
   const scale = metrics.width && outputSize.width ? outputSize.width / metrics.width : 1;
-  const fontSize = Math.max(18, Math.min(420, Math.round(Number(editorTextSize.value || 42) * scale)));
-  const background = editorTextBackground.value || 'dark';
+  const fontSize = Math.max(18, Math.min(420, Math.round(Number(layer.size || 42) * scale)));
+  const background = layer.background || 'dark';
   const padding = ['dark', 'light', 'highlight'].includes(background) ? Math.round(14 * scale) : 0;
   const lineHeight = Math.ceil(fontSize * 1.15);
-  const lines = text.split(/\r?\n/);
+  const outputWidth = outputSize.width || editorNativeSize.width || 1920;
+  const outputHeight = outputSize.height || editorNativeSize.height || 1080;
+  const boxWidth = Math.max(1, Math.round(outputWidth * (Math.max(4, Math.min(100, Number(layer.width || 42))) / 100)));
+  const boxHeight = Math.max(1, Math.round(outputHeight * (Math.max(4, Math.min(100, Number(layer.height || 16))) / 100)));
   const canvas = document.createElement('canvas');
+  canvas.width = boxWidth;
+  canvas.height = boxHeight;
   const context = canvas.getContext('2d');
-  context.font = `900 ${fontSize}px ${editorFontFamily(editorTextFont.value)}`;
-  const textWidth = Math.ceil(Math.max(...lines.map((line) => context.measureText(line || ' ').width)));
-  const previewBox = editorTextOverlay.getBoundingClientRect();
-  const width = Math.ceil(Math.max(textWidth + padding * 2, previewBox.width * scale));
+  context.font = `900 ${fontSize}px ${editorFontFamily(layer.font)}`;
+  const lines = wrapCanvasText(context, text, Math.max(1, canvas.width - padding * 2));
   const textBlockHeight = lines.length * lineHeight;
-  const height = Math.ceil(Math.max(textBlockHeight + padding * 2, previewBox.height * scale));
-  canvas.width = Math.max(1, width);
-  canvas.height = Math.max(1, height);
-  context.font = `900 ${fontSize}px ${editorFontFamily(editorTextFont.value)}`;
+  context.font = `900 ${fontSize}px ${editorFontFamily(layer.font)}`;
   context.textBaseline = 'top';
-  context.textAlign = editorTextHorizontal.value === 'left' ? 'left' : (editorTextHorizontal.value === 'right' ? 'right' : 'center');
+  context.textAlign = layer.horizontal === 'left' ? 'left' : (layer.horizontal === 'right' ? 'right' : 'center');
   context.lineJoin = 'round';
+  context.rect(0, 0, canvas.width, canvas.height);
+  context.clip();
   if (background === 'dark' || background === 'light' || background === 'highlight') {
     context.fillStyle = background === 'light' ? 'rgba(255,255,255,.76)' : (background === 'highlight' ? 'rgba(250,204,21,.82)' : 'rgba(0,0,0,.45)');
-    roundedRect(context, 0, 0, canvas.width, canvas.height, 8);
+    roundedRect(context, 0, 0, canvas.width, canvas.height, Math.max(4, Math.round(8 * scale)));
     context.fill();
   }
-  const horizontal = editorTextHorizontal.value || 'center';
-  const vertical = editorTextPosition.value || 'center';
+  const horizontal = layer.horizontal || 'center';
+  const vertical = layer.vertical || 'center';
   const x = horizontal === 'left' ? padding : (horizontal === 'right' ? canvas.width - padding : canvas.width / 2);
   let startY = padding;
   if (vertical === 'center') {
@@ -2215,10 +2951,38 @@ function createEditorTextOverlayBlob() {
       context.lineWidth = 6;
       context.strokeText(line, x, y);
     }
-    context.fillStyle = editorTextColor.value || '#ffffff';
+    context.fillStyle = layer.color || '#ffffff';
     context.fillText(line, x, y);
   });
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+function wrapCanvasText(context, text, maxWidth) {
+  const lines = [];
+  text.split(/\r?\n/).forEach((rawLine) => {
+    const words = rawLine.split(/(\s+)/).filter((part) => part.length);
+    let line = '';
+    words.forEach((word) => {
+      const next = `${line}${word}`;
+      if (line && context.measureText(next).width > maxWidth) {
+        lines.push(line.trimEnd());
+        line = word.trimStart();
+      }
+      else {
+        line = next;
+      }
+      while (context.measureText(line).width > maxWidth && line.length > 1) {
+        let cut = line.length - 1;
+        while (cut > 1 && context.measureText(line.slice(0, cut)).width > maxWidth) {
+          cut -= 1;
+        }
+        lines.push(line.slice(0, cut));
+        line = line.slice(cut);
+      }
+    });
+    lines.push(line || ' ');
+  });
+  return lines.length ? lines : [' '];
 }
 
 function editorFrameMetrics() {

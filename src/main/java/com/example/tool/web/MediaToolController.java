@@ -214,11 +214,13 @@ public class MediaToolController {
 			@RequestParam(value = "saveMode", required = false) String saveMode,
 			@RequestParam(value = "title", required = false) String title,
 			@RequestParam(value = "segmentsJson", required = false) String segmentsJson,
+			@RequestParam(value = "textLayersJson", required = false) String textLayersJson,
 			@RequestParam(value = "music", required = false) MultipartFile music,
-			@RequestParam(value = "textOverlay", required = false) MultipartFile textOverlay) {
+			@RequestParam(value = "textOverlay", required = false) MultipartFile textOverlay,
+			@RequestParam(value = "textLayerOverlays", required = false) List<MultipartFile> textLayerOverlays) {
 		return highlightService.editSplitClip(jobId, clipIndex, editOptions(sourceType, startSeconds, endSeconds, rotationDegrees, videoZoom,
 				outputWidth, outputHeight, overlayText, textXPercent, textYPercent, textSize, textColor, textFont, textBackground,
-				textPosition, audioMode, muteOriginalAudio, saveMode, title, segmentsJson), music, textOverlay);
+				textPosition, audioMode, muteOriginalAudio, saveMode, title, segmentsJson, textLayersJson), music, textOverlay, textLayerOverlays);
 	}
 
 	@GetMapping("/split-highlights/{jobId}/clips/{clipIndex}/download")
@@ -297,11 +299,13 @@ public class MediaToolController {
 			@RequestParam(value = "saveMode", required = false) String saveMode,
 			@RequestParam(value = "title", required = false) String title,
 			@RequestParam(value = "segmentsJson", required = false) String segmentsJson,
+			@RequestParam(value = "textLayersJson", required = false) String textLayersJson,
 			@RequestParam(value = "music", required = false) MultipartFile music,
-			@RequestParam(value = "textOverlay", required = false) MultipartFile textOverlay) {
+			@RequestParam(value = "textOverlay", required = false) MultipartFile textOverlay,
+			@RequestParam(value = "textLayerOverlays", required = false) List<MultipartFile> textLayerOverlays) {
 		return highlightService.editHighlight(jobId, editOptions(sourceType, startSeconds, endSeconds, rotationDegrees, videoZoom,
 				outputWidth, outputHeight, overlayText, textXPercent, textYPercent, textSize, textColor, textFont, textBackground,
-				textPosition, audioMode, muteOriginalAudio, saveMode, title, segmentsJson), music, textOverlay);
+				textPosition, audioMode, muteOriginalAudio, saveMode, title, segmentsJson, textLayersJson), music, textOverlay, textLayerOverlays);
 	}
 
 	@GetMapping("/highlights/{jobId}/download")
@@ -358,7 +362,7 @@ public class MediaToolController {
 	private VideoEditOptions editOptions(String sourceType, Double startSeconds, Double endSeconds, Double rotationDegrees, Double videoZoom,
 			Integer outputWidth, Integer outputHeight, String overlayText, Double textXPercent, Double textYPercent, Integer textSize,
 			String textColor, String textFont, String textBackground, String textPosition, String audioMode, Boolean muteOriginalAudio,
-			String saveMode, String title, String segmentsJson) {
+			String saveMode, String title, String segmentsJson, String textLayersJson) {
 		VideoEditOptions options = new VideoEditOptions();
 		options.setSourceType(sourceType);
 		options.setStartSeconds(startSeconds);
@@ -380,6 +384,7 @@ public class MediaToolController {
 		options.setSaveMode(saveMode);
 		options.setTitle(title);
 		options.setSegmentsJson(segmentsJson);
+		options.setTextLayersJson(textLayersJson);
 		return options;
 	}
 
