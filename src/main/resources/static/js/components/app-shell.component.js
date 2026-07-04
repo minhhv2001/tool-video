@@ -15,6 +15,7 @@
   <nav class="top-menu nav nav-pills" aria-label="Menu chính">
     <button class="menu-item nav-link active" type="button" data-view="localVideoView">Video Cắt ghép</button>
     <button class="menu-item nav-link" type="button" data-view="splitVideoView">Video Tách</button>
+    <button class="menu-item nav-link" type="button" data-view="manualEditView">Edit video có sẵn</button>
   </nav>`;
   const layoutEnd = `<footer class="app-footer">
     <span>Video Highlight Cutter</span>
@@ -27,6 +28,7 @@
   <main>
     ${components.localVideoView.render()}
     ${components.splitVideoView.render()}
+    ${components.manualEditView.render()}
   </main>
 ${layoutEnd}
 ${components.previewModalShell.render()}

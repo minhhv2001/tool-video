@@ -21,6 +21,7 @@ public class FfmpegService {
 
 	private static final Pattern PTS_TIME_PATTERN = Pattern.compile("pts_time:([0-9]+(?:\\.[0-9]+)?)");
 	private static final Pattern MEAN_VOLUME_PATTERN = Pattern.compile("mean_volume:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*dB");
+	private static final String FAST_RENDER_PRESET = "ultrafast";
 
 	private final MediaToolProperties properties;
 
@@ -143,7 +144,7 @@ public class FfmpegService {
 		command.add("-c:v");
 		command.add("libx264");
 		command.add("-preset");
-		command.add("veryfast");
+		command.add(FAST_RENDER_PRESET);
 		command.add("-crf");
 		command.add("22");
 		command.add("-pix_fmt");
@@ -198,7 +199,7 @@ public class FfmpegService {
 		command.add("-c:v");
 		command.add("libx264");
 		command.add("-preset");
-		command.add("veryfast");
+		command.add(FAST_RENDER_PRESET);
 		command.add("-crf");
 		command.add("22");
 		command.add("-pix_fmt");
@@ -293,7 +294,7 @@ public class FfmpegService {
 		command.add("-c:v");
 		command.add("libx264");
 		command.add("-preset");
-		command.add("veryfast");
+		command.add(FAST_RENDER_PRESET);
 		command.add("-crf");
 		command.add("23");
 		command.add("-pix_fmt");
@@ -324,7 +325,7 @@ public class FfmpegService {
 		command.add("-c:v");
 		command.add("libx264");
 		command.add("-preset");
-		command.add("veryfast");
+		command.add(FAST_RENDER_PRESET);
 		command.add("-crf");
 		command.add("23");
 		command.add("-pix_fmt");
@@ -338,7 +339,7 @@ public class FfmpegService {
 	}
 
 	public List<Double> detectSceneTimes(Path input, double threshold) {
-		String filter = String.format(Locale.ROOT, "select=gt(scene\\,%.2f),showinfo", threshold);
+		String filter = String.format(Locale.ROOT, "fps=6,scale=320:-2,select=gt(scene\\,%.2f),showinfo", threshold);
 		List<String> command = List.of(
 				properties.getFfmpegPath(),
 				"-hide_banner",
@@ -401,7 +402,7 @@ public class FfmpegService {
 				"-safe", "0",
 				"-i", concatList.toAbsolutePath().toString(),
 				"-c:v", "libx264",
-				"-preset", "veryfast",
+				"-preset", FAST_RENDER_PRESET,
 				"-crf", "23",
 				"-pix_fmt", "yuv420p",
 				"-c:a", "aac",
@@ -409,6 +410,32 @@ public class FfmpegService {
 				"-movflags", "+faststart",
 				output.toAbsolutePath().toString());
 		runOrThrow(command, 600, "ffmpeg concat failed");
+	}
+
+	public void concatSegmentsFast(Path concatList, Path output) {
+		try {
+			concatSegments(concatList, output);
+		}
+		catch (IllegalStateException ex) {
+			concatSegmentsReencoded(concatList, output);
+		}
+	}
+
+	public void remuxToMp4(Path input, Path output) {
+		List<String> command = List.of(
+				properties.getFfmpegPath(),
+				"-y",
+				"-i", input.toAbsolutePath().toString(),
+				"-map", "0",
+				"-c", "copy",
+				"-movflags", "+faststart",
+				output.toAbsolutePath().toString());
+		try {
+			runOrThrow(command, 600, "ffmpeg remux failed");
+		}
+		catch (IllegalStateException ex) {
+			renderEditedVideo(input, output, new VideoEditOptions(), null, null);
+		}
 	}
 
 	public void addAudioOrSilence(Path inputVideo, Path outputVideo, Path backgroundAudio) {
@@ -520,6 +547,16 @@ public class FfmpegService {
 
 	private String editVideoFilter(VideoEditOptions options, boolean includeDrawText) {
 		List<String> filters = new ArrayList<>();
+		int outputWidth = sanitizedOutputDimension(options.getOutputWidth());
+		int outputHeight = sanitizedOutputDimension(options.getOutputHeight());
+		if (outputWidth > 0 && outputHeight > 0) {
+			filters.add(String.format(Locale.ROOT,
+					"scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black",
+					outputWidth, outputHeight, outputWidth, outputHeight));
+		}
+		else {
+			filters.add("scale=trunc(iw/2)*2:trunc(ih/2)*2");
+		}
 		double zoom = options.getVideoZoom() == null ? 1 : clamp(options.getVideoZoom(), 0.5, 2.5);
 		if (Math.abs(zoom - 1.0) > 0.001) {
 			String zoomValue = String.format(Locale.ROOT, "%.4f", zoom);
@@ -537,16 +574,6 @@ public class FfmpegService {
 			double radians = rotation * Math.PI / 180.0;
 			String angle = String.format(Locale.ROOT, "%.8f", radians);
 			filters.add("rotate=" + angle + ":ow=iw:oh=ih:fillcolor=black");
-		}
-		int outputWidth = sanitizedOutputDimension(options.getOutputWidth());
-		int outputHeight = sanitizedOutputDimension(options.getOutputHeight());
-		if (outputWidth > 0 && outputHeight > 0) {
-			filters.add(String.format(Locale.ROOT,
-					"scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d",
-					outputWidth, outputHeight, outputWidth, outputHeight));
-		}
-		else {
-			filters.add("scale=trunc(iw/2)*2:trunc(ih/2)*2");
 		}
 		String text = includeDrawText && options.getOverlayText() != null ? options.getOverlayText().trim() : "";
 		if (!text.isBlank()) {

@@ -110,6 +110,11 @@ public class MediaToolController {
 		return videoBatchService.createBatch(request);
 	}
 
+	@PostMapping(value = "/edit-videos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	public VideoEditResult createEditableVideo(@RequestParam("video") MultipartFile video) {
+		return highlightService.createEditableVideo(video);
+	}
+
 	@PostMapping(value = "/highlights", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	public HighlightJobStatus createHighlight(
 			@RequestParam(value = "videos", required = false) List<MultipartFile> videos,

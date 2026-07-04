@@ -94,13 +94,6 @@
               <span class="tool-icon">↺</span>
             </button>
           </div>
-          <div class="segment-order-panel">
-            <div class="segment-order-head">
-              <strong>Th&#7913; t&#7921; xu&#7845;t</strong>
-              <span>K&#233;o t&#7915;ng kh&#250;c &#273;&#7875; &#273;&#7893;i th&#7913; t&#7921;. Khi x&#243;a kh&#250;c gi&#7919;a, c&#225;c kh&#250;c c&#242;n l&#7841;i s&#7869; n&#7889;i s&#225;t nhau khi l&#432;u.</span>
-            </div>
-            <div class="segment-order-list" id="editorSegmentOrderList"></div>
-          </div>
             <div class="text-layer-panel">
               <div class="text-layer-head">
                 <strong>D&#242;ng th&#7901;i gian text</strong>

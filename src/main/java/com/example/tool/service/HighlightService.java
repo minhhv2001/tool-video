@@ -53,7 +53,8 @@ public class HighlightService {
 	private static final double DEFAULT_CLIP_SECONDS = 5.0;
 	private static final double MAX_CLIP_SECONDS = 60.0;
 	private static final double SCENE_THRESHOLD = 0.12;
-	private static final int MAX_CANDIDATES_TO_SCORE = 120;
+	private static final int MAX_CANDIDATES_TO_SCORE = 90;
+	private static final int MAX_AUDIO_PROBES_PER_SOURCE = 48;
 	private static final int HISTORY_DELETE_THRESHOLD = 20;
 	private static final int HISTORY_DELETE_OLDEST_COUNT = 10;
 	private static final List<String> VIDEO_EXTENSIONS = List.of(".mp4", ".mkv", ".webm", ".mov", ".m4v");
@@ -279,6 +280,56 @@ public class HighlightService {
 		return new SplitClipHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
 	}
 
+	public VideoEditResult createEditableVideo(MultipartFile file) {
+		if (file == null || file.isEmpty()) {
+			throw new IllegalArgumentException("Hãy chọn hoặc kéo một file video để chỉnh sửa.");
+		}
+		if (!ffmpegService.ffmpegAvailable() || !ffmpegService.ffprobeAvailable()) {
+			throw new IllegalStateException("Máy chưa có ffmpeg/ffprobe. Cài ffmpeg hoặc cấu hình đường dẫn ffmpeg trước khi render.");
+		}
+		workspace.ensureBaseDirectories();
+		String jobId = newJobId();
+		Path jobDirectory = jobDirectory(jobId);
+		Path uploadDirectory = jobDirectory.resolve("upload");
+		Path workDirectory = jobDirectory.resolve("work");
+		Path outputDirectory = jobDirectory.resolve("output");
+		String originalName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank() ? "video-upload.mp4" : file.getOriginalFilename();
+		Path uploadedVideo = uploadDirectory.resolve("01-" + safeFileName(originalName)).normalize();
+		Path output = outputDirectory.resolve("highlight.mp4");
+		try {
+			Files.createDirectories(uploadDirectory);
+			Files.createDirectories(workDirectory);
+			Files.createDirectories(outputDirectory);
+			file.transferTo(uploadedVideo);
+			ffmpegService.remuxToMp4(uploadedVideo, output);
+			double duration = ffmpegService.probeDuration(output);
+			String now = Instant.now().toString();
+			HighlightHistoryItem item = new HighlightHistoryItem(
+					jobId,
+					"ready",
+					now,
+					now,
+					List.of(originalName),
+					"Video upload để chỉnh sửa thủ công.",
+					duration,
+					1,
+					"/api/highlights/" + jobId + "/download",
+					null);
+			saveManifest(jobDirectory, item);
+			enforceHistoryLimit(jobId);
+			LOGGER.info("[{}] Đã tạo job chỉnh sửa thủ công từ video upload: {}", jobId, uploadedVideo);
+			return new VideoEditResult(jobId, item.getDownloadUrl(), "/api/highlights/" + jobId + "/preview", "Đã tải video lên. Có thể chỉnh sửa ngay.");
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không thể lưu video để chỉnh sửa.", ex);
+		}
+		catch (RuntimeException ex) {
+			writeError(jobDirectory, ex);
+			saveManifest(jobDirectory, toHistory(new HighlightJobStatus(jobId, originalName), "error", 0, 0, null, ex.getMessage()));
+			throw ex;
+		}
+	}
+
 	public Path downloadPath(String jobId) {
 		Path output = jobDirectory(jobId).resolve("output").resolve("highlight.mp4").normalize();
 		if (!Files.isRegularFile(output)) {
@@ -493,7 +544,7 @@ public class HighlightService {
 			progress(status, 92, "Đang ghép các đoạn hay thành video hoàn chỉnh.");
 
 			Path output = outputDirectory.resolve("highlight.mp4");
-			ffmpegService.concatSegmentsReencoded(concatList, output);
+			ffmpegService.concatSegmentsFast(concatList, output);
 
 			List<Double> selectedStarts = selectedSegments.stream().map(SelectedSegment::start).collect(Collectors.toList());
 			List<String> warnings = new ArrayList<>();
@@ -753,17 +804,54 @@ public class HighlightService {
 			dedupedStarts = evenlySample(dedupedStarts, MAX_CANDIDATES_TO_SCORE);
 		}
 
-		List<SelectedSegment> candidates = new ArrayList<>();
+		List<CandidateSeed> seeds = new ArrayList<>();
 		for (Double start : dedupedStarts) {
 			int sceneCount = countScenesInRange(sceneTimes, start, start + clipSeconds);
-			double meanVolume = ffmpegService.measureMeanVolume(source.path(), start, clipSeconds);
 			double motionScore = motionScore(sceneCount);
-			double audioScore = audioScore(meanVolume);
 			double positionScore = positionScore(start, source.duration());
-			double total = preference.score(start, source.duration(), sceneCount, motionScore, audioScore, positionScore);
-			candidates.add(new SelectedSegment(source, start, clipSeconds, total, meanVolume, sceneCount, motionScore));
+			double estimatedAudioScore = preference.preferTalking ? 28.0 : 18.0;
+			double preliminaryScore = preference.score(start, source.duration(), sceneCount, motionScore, estimatedAudioScore, positionScore);
+			seeds.add(new CandidateSeed(start, sceneCount, motionScore, positionScore, preliminaryScore));
+		}
+		seeds.sort(Comparator.comparingDouble(CandidateSeed::preliminaryScore).reversed());
+
+		List<SelectedSegment> candidates = new ArrayList<>();
+		for (CandidateSeed seed : candidatesToProbe(seeds)) {
+			double meanVolume = ffmpegService.measureMeanVolume(source.path(), seed.start(), clipSeconds);
+			double audioScore = audioScore(meanVolume);
+			double total = preference.score(seed.start(), source.duration(), seed.sceneCount(), seed.motionScore(), audioScore, seed.positionScore());
+			candidates.add(new SelectedSegment(source, seed.start(), clipSeconds, total, meanVolume, seed.sceneCount(), seed.motionScore()));
 		}
 		return candidates;
+	}
+
+	private List<CandidateSeed> candidatesToProbe(List<CandidateSeed> seeds) {
+		if (seeds.size() <= MAX_AUDIO_PROBES_PER_SOURCE) {
+			return seeds;
+		}
+		List<CandidateSeed> selected = new ArrayList<>();
+		Set<Double> selectedStarts = new LinkedHashSet<>();
+		int topCount = Math.min(MAX_AUDIO_PROBES_PER_SOURCE * 3 / 4, seeds.size());
+		for (int i = 0; i < topCount; i++) {
+			addSeedIfAbsent(selected, selectedStarts, seeds.get(i));
+		}
+		List<CandidateSeed> seedsByTime = new ArrayList<>(seeds);
+		seedsByTime.sort(Comparator.comparingDouble(CandidateSeed::start));
+		List<CandidateSeed> timelineSample = evenlySample(seedsByTime, MAX_AUDIO_PROBES_PER_SOURCE - selected.size());
+		for (CandidateSeed seed : timelineSample) {
+			addSeedIfAbsent(selected, selectedStarts, seed);
+			if (selected.size() >= MAX_AUDIO_PROBES_PER_SOURCE) {
+				break;
+			}
+		}
+		selected.sort(Comparator.comparingDouble(CandidateSeed::preliminaryScore).reversed());
+		return selected;
+	}
+
+	private void addSeedIfAbsent(List<CandidateSeed> selected, Set<Double> selectedStarts, CandidateSeed seed) {
+		if (selectedStarts.add(seed.start())) {
+			selected.add(seed);
+		}
 	}
 
 	private List<Integer> calculateSourceQuotas(List<VideoSource> sources, int clipCount) {
@@ -892,8 +980,11 @@ public class HighlightService {
 		return Math.min(clipSeconds * 0.12, freeGap * 0.35);
 	}
 
-	private List<Double> evenlySample(List<Double> values, int limit) {
-		List<Double> sampled = new ArrayList<>();
+	private <T> List<T> evenlySample(List<T> values, int limit) {
+		List<T> sampled = new ArrayList<>();
+		if (limit <= 0) {
+			return sampled;
+		}
 		if (values.size() <= limit) {
 			return values;
 		}
@@ -1206,7 +1297,7 @@ public class HighlightService {
 				Path concatList = workDirectory.resolve("edit-concat-" + UUID.randomUUID().toString().substring(0, 6) + ".txt");
 				writeConcatList(concatList, renderedSegments);
 				Path concatOutput = workDirectory.resolve("edit-concat-" + UUID.randomUUID().toString().substring(0, 6) + ".mp4");
-				ffmpegService.concatSegmentsReencoded(concatList, concatOutput);
+				ffmpegService.concatSegmentsFast(concatList, concatOutput);
 				ffmpegService.applyEditAudio(concatOutput, baseOutput, options.getAudioMode(), music, Boolean.TRUE.equals(options.getMuteOriginalAudio()));
 			}
 			if (hasTimedTextLayers) {
@@ -2125,6 +2216,42 @@ public class HighlightService {
 
 		double duration() {
 			return duration;
+		}
+	}
+
+	private static class CandidateSeed {
+		private final double start;
+		private final int sceneCount;
+		private final double motionScore;
+		private final double positionScore;
+		private final double preliminaryScore;
+
+		CandidateSeed(double start, int sceneCount, double motionScore, double positionScore, double preliminaryScore) {
+			this.start = start;
+			this.sceneCount = sceneCount;
+			this.motionScore = motionScore;
+			this.positionScore = positionScore;
+			this.preliminaryScore = preliminaryScore;
+		}
+
+		double start() {
+			return start;
+		}
+
+		int sceneCount() {
+			return sceneCount;
+		}
+
+		double motionScore() {
+			return motionScore;
+		}
+
+		double positionScore() {
+			return positionScore;
+		}
+
+		double preliminaryScore() {
+			return preliminaryScore;
 		}
 	}
 

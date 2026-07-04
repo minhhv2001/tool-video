@@ -50,6 +50,16 @@ const splitNetworkSourcePanel = document.querySelector('#splitNetworkSourcePanel
 const splitVideoUrl = document.querySelector('#splitVideoUrl');
 const splitCookiesFilePath = document.querySelector('#splitCookiesFilePath');
 const splitAspectRatio = document.querySelector('#splitAspectRatio');
+const manualEditDropzone = document.querySelector('#manualEditDropzone');
+const manualEditVideoFile = document.querySelector('#manualEditVideoFile');
+const manualEditFileList = document.querySelector('#manualEditFileList');
+const manualEditForm = document.querySelector('#manualEditForm');
+const manualEditOpenButton = document.querySelector('#manualEditOpenButton');
+const manualEditClearButton = document.querySelector('#manualEditClearButton');
+const manualEditRing = document.querySelector('#manualEditRing');
+const manualEditPercent = document.querySelector('#manualEditPercent');
+const manualEditBarFill = document.querySelector('#manualEditBarFill');
+const manualEditState = document.querySelector('#manualEditState');
 const previewModal = document.querySelector('#previewModal');
 const previewBackdrop = document.querySelector('#previewBackdrop');
 const previewClose = document.querySelector('#previewClose');
@@ -125,7 +135,6 @@ const editorSetEndAtPlayhead = document.querySelector('#editorSetEndAtPlayhead')
 const editorSplitAtPlayhead = document.querySelector('#editorSplitAtPlayhead');
 const editorDeleteSegment = document.querySelector('#editorDeleteSegment');
 const editorResetSegments = document.querySelector('#editorResetSegments');
-const editorSegmentOrderList = document.querySelector('#editorSegmentOrderList');
 const editorTextLayerTimelineScroll = document.querySelector('#editorTextLayerTimelineScroll');
 const editorTextLayerTimeline = document.querySelector('#editorTextLayerTimeline');
 
@@ -141,8 +150,10 @@ let splitPollTimer = null;
 let splitCurrentPage = 1;
 let splitCurrentHistoryItems = [];
 let splitSelectedClipKeys = new Set();
+let manualEditFile = null;
+let manualEditPreviewUrl = '';
 let currentEditor = null;
-let editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0 };
+let editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0, dragOutputStart: 0, dragTotalDuration: 0, dragStart: 0, dragEnd: 0, dragTimelineWidth: 0 };
 let editorSegments = [];
 let selectedEditorSegmentIndex = 0;
 let editorSegmentSerial = 1;
@@ -153,6 +164,7 @@ let editorTextLayerSerial = 1;
 let editorTextTimelineDrag = null;
 let editorAudioObjectUrl = '';
 let editorZoom = 1;
+let editorVideoDrag = { active: false, startX: 0, startY: 0, startZoom: 1, startRotation: 0 };
 let editorUndoStack = [];
 let editorNativeSize = { width: 0, height: 0 };
 let draggedEditorSegmentIndex = null;
@@ -214,6 +226,19 @@ function splitSetProgress(value, message, type = '') {
   splitState.className = `state ${type}`;
   splitState.textContent = message;
   splitRing.classList.toggle('spin', type !== 'ok' && type !== 'error' && safe > 0 && safe < 100);
+}
+
+function manualEditSetProgress(value, message, type = '') {
+  if (!manualEditRing) {
+    return;
+  }
+  const safe = Math.max(0, Math.min(100, Math.round(value || 0)));
+  manualEditRing.style.setProperty('--angle', `${safe * 3.6}deg`);
+  manualEditPercent.textContent = `${safe}%`;
+  manualEditBarFill.style.width = `${safe}%`;
+  manualEditState.className = `state ${type}`;
+  manualEditState.textContent = message;
+  manualEditRing.classList.toggle('spin', type !== 'ok' && type !== 'error' && safe > 0 && safe < 100);
 }
 
 function fileKey(file) {
@@ -320,6 +345,59 @@ function renderSplitFiles() {
     splitFileList.appendChild(row);
   });
   splitSetProgress(0, splitSelectedFiles.length ? `Đã chọn ${splitSelectedFiles.length} video. Bạn có thể kéo thêm video vào danh sách.` : 'Sẵn sàng nhận video.');
+}
+
+function setManualEditFile(file) {
+  if (!file || !file.type.startsWith('video/')) {
+    manualEditSetProgress(100, 'File được chọn không phải video.', 'error');
+    return;
+  }
+  clearManualEditPreview();
+  manualEditFile = file;
+  manualEditPreviewUrl = URL.createObjectURL(file);
+  renderManualEditFile();
+}
+
+function clearManualEditPreview() {
+  if (manualEditPreviewUrl) {
+    URL.revokeObjectURL(manualEditPreviewUrl);
+  }
+  manualEditPreviewUrl = '';
+}
+
+function clearManualEditFile() {
+  manualEditFile = null;
+  clearManualEditPreview();
+  if (manualEditVideoFile) {
+    manualEditVideoFile.value = '';
+  }
+  renderManualEditFile();
+}
+
+function renderManualEditFile() {
+  if (!manualEditFileList) {
+    return;
+  }
+  manualEditFileList.innerHTML = '';
+  manualEditOpenButton.disabled = !manualEditFile;
+  manualEditClearButton.disabled = !manualEditFile;
+  if (!manualEditFile) {
+    manualEditSetProgress(0, 'Sẵn sàng nhận video để chỉnh sửa.');
+    return;
+  }
+  const row = document.createElement('div');
+  row.className = 'file-row manual-edit-file-row';
+  row.innerHTML = `
+    <video src="${manualEditPreviewUrl}" muted playsinline controls></video>
+    <div>
+      <div class="file-name">${escapeHtml(manualEditFile.name)}</div>
+      <div class="file-size">${(manualEditFile.size / 1024 / 1024).toFixed(1)} MB</div>
+    </div>
+    <button class="file-remove" type="button" aria-label="Xóa video này">×</button>
+  `;
+  row.querySelector('.file-remove').addEventListener('click', clearManualEditFile);
+  manualEditFileList.appendChild(row);
+  manualEditSetProgress(0, 'Đã chọn video. Bấm mở trình chỉnh sửa để bắt đầu.');
 }
 
 async function loadHealth() {
@@ -789,6 +867,33 @@ async function uploadNetworkJob(payload) {
   return result;
 }
 
+function uploadManualEditVideo(data) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/api/edit-videos');
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const uploadPercent = Math.min(90, Math.round((event.loaded / event.total) * 90));
+        manualEditSetProgress(uploadPercent, `Đang tải video lên server... ${Math.round((event.loaded / event.total) * 100)}%`);
+      }
+    };
+    request.onload = () => {
+      try {
+        const result = JSON.parse(request.responseText || '{}');
+        if (request.status >= 200 && request.status < 300) {
+          resolve(result);
+        } else {
+          reject(new Error(result.error || 'Upload video để chỉnh sửa thất bại.'));
+        }
+      } catch (error) {
+        reject(new Error('Server trả về dữ liệu không hợp lệ.'));
+      }
+    };
+    request.onerror = () => reject(new Error('Không thể upload video lên server.'));
+    request.send(data);
+  });
+}
+
 function uploadSplitJob(data) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -941,6 +1046,65 @@ function initSplitUploadEvents() {
   });
 
   splitFileInput.addEventListener('change', () => addSplitFiles(splitFileInput.files));
+}
+
+function initManualEditUploadEvents() {
+  if (!manualEditDropzone) {
+    return;
+  }
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    manualEditDropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      manualEditDropzone.classList.add('active');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach((eventName) => {
+    manualEditDropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      manualEditDropzone.classList.remove('active');
+    });
+  });
+
+  manualEditDropzone.addEventListener('drop', (event) => {
+    const file = Array.from(event.dataTransfer.files || []).find((item) => item.type.startsWith('video/'));
+    if (file) {
+      setManualEditFile(file);
+    }
+  });
+
+  manualEditVideoFile.addEventListener('change', () => {
+    const file = manualEditVideoFile.files && manualEditVideoFile.files[0];
+    if (file) {
+      setManualEditFile(file);
+    }
+  });
+
+  manualEditClearButton.addEventListener('click', clearManualEditFile);
+
+  manualEditForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!manualEditFile) {
+      manualEditSetProgress(100, 'Bạn chưa chọn video để chỉnh sửa.', 'error');
+      return;
+    }
+    const data = new FormData();
+    data.append('video', manualEditFile);
+    manualEditOpenButton.disabled = true;
+    manualEditClearButton.disabled = true;
+    manualEditSetProgress(1, 'Đang chuẩn bị upload video để chỉnh sửa...');
+    try {
+      const result = await uploadManualEditVideo(data);
+      manualEditSetProgress(100, result.message || 'Đã tải video lên. Đang mở trình chỉnh sửa...', 'ok');
+      await loadHistory(1);
+      openEditor(`/api/highlights/${encodeURIComponent(result.jobId)}/edit`, result.previewUrl, manualEditFile.name, 'highlight');
+    } catch (error) {
+      manualEditSetProgress(100, error.message, 'error');
+    } finally {
+      manualEditOpenButton.disabled = !manualEditFile;
+      manualEditClearButton.disabled = !manualEditFile;
+    }
+  });
 }
 
 function initFormEvents() {
@@ -1108,6 +1272,7 @@ function initEditorEvents() {
   editorVideo.addEventListener('loadedmetadata', initializeEditorTrim);
   editorVideo.addEventListener('loadeddata', drawEditorFrame);
   editorVideo.addEventListener('timeupdate', () => {
+    keepEditorPlaybackInsideSegments();
     updateEditorPlayhead();
     updateEditorTextOverlay();
     syncEditorAudioPreview(false);
@@ -1130,6 +1295,8 @@ function initEditorEvents() {
   editorVideo.addEventListener('ratechange', () => {
     editorAudioPreview.playbackRate = editorVideo.playbackRate || 1;
   });
+  editorVideoLayer.addEventListener('pointerdown', startEditorVideoDrag);
+  editorVideoLayer.addEventListener('wheel', zoomEditorVideoFromWheel, { passive: false });
   editorStart.addEventListener('input', syncEditorTrimFromFields);
   editorEnd.addEventListener('input', syncEditorTrimFromFields);
   editorRotation.addEventListener('input', updateEditorRotationPreview);
@@ -1210,6 +1377,11 @@ function initEditorEvents() {
     if ((event.key === ' ' || event.code === 'Space') && !isEditorTypingTarget(event.target)) {
       event.preventDefault();
       toggleEditorPlayback();
+      return;
+    }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && !isEditorTypingTarget(event.target)) {
+      event.preventDefault();
+      editorDeleteSegment.click();
     }
   });
   window.addEventListener('resize', updateEditorFrameGuide);
@@ -1309,8 +1481,67 @@ function editorSegmentDuration(segment) {
   return Math.max(0, Number(segment.end || 0) - Number(segment.start || 0));
 }
 
+function editorSegmentOutputStart(index) {
+  return editorSegments.slice(0, Math.max(0, index)).reduce((sum, segment) => sum + editorSegmentDuration(segment), 0);
+}
+
+function editorOutputTimeFromPointer(event) {
+  const rect = editorTrimTrack.getBoundingClientRect();
+  const ratio = rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
+  return ratio * editorTimelineDisplayDuration();
+}
+
+function editorTimelineDisplayDuration() {
+  return editorTrim.dragging && editorTrim.dragTotalDuration
+    ? editorTrim.dragTotalDuration
+    : editorOutputDuration();
+}
+
+function sourceTimeFromOutputTime(outputTime) {
+  let cursor = 0;
+  for (let index = 0; index < editorSegments.length; index += 1) {
+    const segment = editorSegments[index];
+    const duration = editorSegmentDuration(segment);
+    if (outputTime <= cursor + duration || index === editorSegments.length - 1) {
+      return roundTrimTime(segment.start + Math.max(0, Math.min(duration, outputTime - cursor)));
+    }
+    cursor += duration;
+  }
+  return roundTrimTime(Number(editorVideo.currentTime || 0));
+}
+
+function editorSegmentAtOutputTime(outputTime) {
+  let cursor = 0;
+  for (let index = 0; index < editorSegments.length; index += 1) {
+    const segment = editorSegments[index];
+    const duration = editorSegmentDuration(segment);
+    if (outputTime <= cursor + duration || index === editorSegments.length - 1) {
+      const offset = Math.max(0, Math.min(duration, outputTime - cursor));
+      return {
+        index,
+        segment,
+        sourceTime: roundTrimTime(segment.start + offset),
+        outputStart: cursor,
+        outputEnd: cursor + duration
+      };
+    }
+    cursor += duration;
+  }
+  return null;
+}
+
+function seekEditorToOutputTime(outputTime) {
+  const hit = editorSegmentAtOutputTime(outputTime);
+  if (!hit) {
+    return;
+  }
+  selectEditorSegment(hit.index, hit.sourceTime);
+  editorVideo.currentTime = hit.sourceTime;
+  updateEditorPlayhead();
+}
+
 function resetEditorTrim() {
-  editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0 };
+  editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0, dragOutputStart: 0, dragTotalDuration: 0, dragStart: 0, dragEnd: 0, dragTimelineWidth: 0 };
   editorSegments = [];
   selectedEditorSegmentIndex = 0;
   editorSegmentSerial = 1;
@@ -1426,7 +1657,6 @@ async function captureEditorTimelineThumbnails(source, duration, jobId) {
     editorTimelineThumbnails = thumbnails.slice();
     renderEditorThumbnailStrip();
     renderEditorSegments();
-    renderEditorSegmentOrder();
   }
 
   video.removeAttribute('src');
@@ -1500,8 +1730,13 @@ function startTrimDrag(event, mode) {
   pushEditorUndo();
   event.preventDefault();
   event.stopPropagation();
-  const time = trimTimeFromPointer(event);
   editorTrim.dragging = mode;
+  editorTrim.dragOutputStart = editorSegmentOutputStart(selectedEditorSegmentIndex);
+  editorTrim.dragTotalDuration = editorOutputDuration();
+  editorTrim.dragStart = editorTrim.start;
+  editorTrim.dragEnd = editorTrim.end;
+  editorTrim.dragTimelineWidth = editorTrimTrack.getBoundingClientRect().width || 0;
+  const time = trimTimeFromPointerForDrag(event);
   editorTrim.dragOffset = mode === 'range' ? time - editorTrim.start : 0;
   editorTrimTrack.setPointerCapture(event.pointerId);
   editorTrimTrack.addEventListener('pointermove', onTrimDrag);
@@ -1513,16 +1748,16 @@ function onTrimDrag(event) {
   if (!editorTrim.duration || !editorTrim.dragging) {
     return;
   }
-  const time = trimTimeFromPointer(event);
+  const time = trimTimeFromPointerForDrag(event);
   if (editorTrim.dragging === 'start') {
-    setEditorTrim(time, editorTrim.end, true);
+    setEditorTrim(time, editorTrim.dragEnd, true);
     return;
   }
   if (editorTrim.dragging === 'end') {
-    setEditorTrim(editorTrim.start, time, true);
+    setEditorTrim(editorTrim.dragStart, time, true);
     return;
   }
-  const length = editorTrim.end - editorTrim.start;
+  const length = editorTrim.dragEnd - editorTrim.dragStart;
   const bounds = selectedEditorSegmentBounds();
   let start = time - editorTrim.dragOffset;
   start = Math.max(bounds.min, Math.min(bounds.max - length, start));
@@ -1531,26 +1766,26 @@ function onTrimDrag(event) {
 
 function stopTrimDrag() {
   editorTrim.dragging = null;
+  editorTrim.dragOffset = 0;
+  editorTrim.dragOutputStart = 0;
+  editorTrim.dragTotalDuration = 0;
+  editorTrim.dragStart = 0;
+  editorTrim.dragEnd = 0;
+  editorTrim.dragTimelineWidth = 0;
   editorTrimTrack.removeEventListener('pointermove', onTrimDrag);
+  updateEditorTimelineScale();
+  renderEditorSegments();
+  updateEditorTrimUI();
 }
 
 function seekEditorFromTimeline(event) {
   if (!editorTrim.duration) {
     return;
   }
-  const segmentButton = event.target.closest ? event.target.closest('.trim-segment') : null;
-  if (segmentButton) {
-    const index = Number(segmentButton.dataset.index);
-    const time = trimTimeFromPointer(event);
-    selectEditorSegment(index, time);
+  if (event.target === editorTrimStartHandle || event.target === editorTrimEndHandle) {
     return;
   }
-  if (event.target === editorTrimSelection || event.target === editorTrimStartHandle || event.target === editorTrimEndHandle) {
-    return;
-  }
-  const time = trimTimeFromPointer(event);
-  editorVideo.currentTime = time;
-  updateEditorPlayhead();
+  seekEditorToOutputTime(editorOutputTimeFromPointer(event));
 }
 
 function setEditorTrim(start, end, seekToStart) {
@@ -1586,12 +1821,14 @@ function setEditorTrim(start, end, seekToStart) {
 }
 
 function updateEditorTrimUI() {
-  const duration = editorTrim.duration || 0;
-  const startRatio = duration ? editorTrim.start / duration : 0;
-  const endRatio = duration ? editorTrim.end / duration : 0;
+  const duration = editorTimelineDisplayDuration();
+  updateEditorTimelineScale(duration);
+  const selectedOutputStart = editorSegmentOutputStart(selectedEditorSegmentIndex);
+  const selectedDuration = Math.max(0, editorTrim.end - editorTrim.start);
+  const startRatio = duration ? selectedOutputStart / duration : 0;
+  const endRatio = duration ? (selectedOutputStart + selectedDuration) / duration : 0;
   const widthRatio = Math.max(0, endRatio - startRatio);
   renderEditorSegments();
-  renderEditorSegmentOrder();
   editorTrimSelection.style.left = `${startRatio * 100}%`;
   editorTrimSelection.style.width = `${widthRatio * 100}%`;
   editorTrimStartHandle.style.left = `${startRatio * 100}%`;
@@ -1604,6 +1841,26 @@ function updateEditorTrimUI() {
     : 'Đoạn đã chọn';
   editorTrimDurationLabel.textContent = `${segmentLabel}: ${formatTimelineTime(Math.max(0, editorTrim.end - editorTrim.start))}`;
   updateEditorPlayhead();
+}
+
+function updateEditorTimelineScale(duration = editorOutputDuration()) {
+  if (!editorTrimTrack || !editorTrimTrackScroll) {
+    return;
+  }
+  if (editorTrim.dragging && editorTrim.dragTimelineWidth) {
+    editorTrimTrack.style.width = `${editorTrim.dragTimelineWidth}px`;
+    if (editorTextLayerTimeline) {
+      editorTextLayerTimeline.style.width = `${editorTrim.dragTimelineWidth}px`;
+    }
+    return;
+  }
+  const pixelsPerSecond = 42 * editorTimelineZoom;
+  const viewportWidth = editorTrimTrackScroll.clientWidth || 0;
+  const width = Math.max(viewportWidth, Math.ceil(Math.max(0.2, duration || 0.2) * pixelsPerSecond));
+  editorTrimTrack.style.width = `${width}px`;
+  if (editorTextLayerTimeline) {
+    editorTextLayerTimeline.style.width = `${width}px`;
+  }
 }
 
 function editorThumbnailForSegment(segment) {
@@ -1628,19 +1885,22 @@ function renderEditorSegments() {
     return;
   }
   editorSegmentsLayer.innerHTML = '';
-  const duration = editorTrim.duration || 0;
-  if (!duration) {
+  const totalDuration = editorTimelineDisplayDuration();
+  if (!totalDuration) {
     return;
   }
+  let outputStart = 0;
   editorSegments.forEach((segment, index) => {
+    const outputDuration = editorSegmentDuration(segment);
     const button = EditorTimelineComponent
       ? EditorTimelineComponent.createTimelineSegmentButton({
           segment,
           index,
-          duration,
+          outputStart,
+          outputDuration,
+          totalDuration,
           active: index === selectedEditorSegmentIndex,
-          formatTime: formatTimelineTime,
-          thumbnailUrl: editorThumbnailForSegment(segment)
+          formatTime: formatTimelineTime
         })
       : document.createElement('button');
     button.addEventListener('click', (event) => {
@@ -1649,31 +1909,7 @@ function renderEditorSegments() {
     });
     wireEditorSegmentDrag(button, index);
     editorSegmentsLayer.appendChild(button);
-  });
-}
-
-function renderEditorSegmentOrder() {
-  if (!editorSegmentOrderList) {
-    return;
-  }
-  editorSegmentOrderList.innerHTML = '';
-  if (!editorSegments.length) {
-    return;
-  }
-  editorSegments.forEach((segment, index) => {
-    const button = EditorTimelineComponent
-      ? EditorTimelineComponent.createSegmentOrderButton({
-          segment,
-          index,
-          active: index === selectedEditorSegmentIndex,
-          formatTime: formatTimelineTime,
-          thumbnailUrl: editorThumbnailForSegment(segment)
-        })
-      : document.createElement('button');
-    button.addEventListener('click', () => selectEditorSegment(index, segment.start));
-    button.style.flexGrow = String(Math.max(0.4, editorSegmentDuration(segment)));
-    wireEditorSegmentDrag(button, index);
-    editorSegmentOrderList.appendChild(button);
+    outputStart += outputDuration;
   });
 }
 
@@ -1713,7 +1949,7 @@ function reorderEditorSegment(from, to) {
   editorSegments.splice(to, 0, segment);
   selectedEditorSegmentIndex = to;
   selectEditorSegment(to, segment.start, true);
-  setEditorStatus(`Đã đưa ${segment.label || `khúc ${from + 1}`} sang vị trí xuất ${to + 1}. Tên khúc và thời lượng được giữ nguyên.`, 'ok');
+  window.setTimeout(() => setEditorStatus(`Đã hoán đổi ${segment.label || `khúc ${from + 1}`} sang vị trí xuất ${to + 1}. Timeline đã xếp lại sát nhau theo thứ tự mới.`, 'ok'), 0);
 }
 
 function segmentIndexAtTime(time) {
@@ -1739,25 +1975,42 @@ function selectSegmentAtPlayhead(shouldSeek = false) {
   return index;
 }
 
-function selectedEditorSegmentBounds() {
+function keepEditorPlaybackInsideSegments() {
+  if (editorVideo.paused || !editorSegments.length) {
+    return;
+  }
   const current = editorSegments[selectedEditorSegmentIndex];
   if (!current) {
-    return { min: 0, max: editorTrim.duration };
+    return;
   }
-  let min = 0;
-  let max = editorTrim.duration;
-  editorSegments.forEach((segment, index) => {
-    if (index === selectedEditorSegmentIndex) {
-      return;
-    }
-    if (segment.end <= current.start) {
-      min = Math.max(min, segment.end);
-    }
-    if (segment.start >= current.end) {
-      max = Math.min(max, segment.start);
-    }
-  });
-  return { min, max };
+  const time = Number(editorVideo.currentTime || 0);
+  const tolerance = 0.035;
+  if (time < current.start - tolerance) {
+    editorVideo.currentTime = current.start;
+    return;
+  }
+  if (time <= current.end + tolerance) {
+    return;
+  }
+  const nextIndex = selectedEditorSegmentIndex + 1;
+  if (nextIndex < editorSegments.length) {
+    const next = editorSegments[nextIndex];
+    selectedEditorSegmentIndex = nextIndex;
+    editorTrim.start = roundTrimTime(next.start);
+    editorTrim.end = roundTrimTime(next.end);
+    editorStart.value = formatTrimInput(editorTrim.start);
+    editorEnd.value = formatTrimInput(editorTrim.end);
+    editorVideo.currentTime = next.start;
+    updateEditorTrimUI();
+    return;
+  }
+  editorVideo.pause();
+  editorVideo.currentTime = current.end;
+  updateEditorTrimUI();
+}
+
+function selectedEditorSegmentBounds() {
+  return { min: 0, max: editorTrim.duration };
 }
 
 function selectEditorSegment(index, seekTime, shouldSeek = true) {
@@ -1783,6 +2036,7 @@ function splitEditorAtPlayhead() {
   if (!editorTrim.duration) {
     return;
   }
+  const wasPlaying = !editorVideo.paused;
   pushEditorUndo();
   const time = roundTrimTime(editorVideo.currentTime || 0);
   const segmentIndex = segmentIndexAtTime(time);
@@ -1806,6 +2060,9 @@ function splitEditorAtPlayhead() {
     rightSegment
   );
   selectEditorSegment(selectedEditorSegmentIndex, time, false);
+  if (wasPlaying) {
+    editorVideo.play().catch(() => {});
+  }
   setEditorStatus(`Đã tách ${segment.label || 'khúc đã chọn'} thành ${leftSegment.label} và ${rightSegment.label}.`, 'ok');
 }
 
@@ -1936,23 +2193,30 @@ function updateEditorUndoButton() {
 }
 
 function updateEditorPlayhead() {
-  const duration = editorTrim.duration || Number(editorVideo.duration || 0);
+  const duration = editorOutputDuration();
   if (!duration || !Number.isFinite(duration)) {
     editorTrimPlayhead.style.left = '0%';
     return;
   }
-  const ratio = Math.max(0, Math.min(1, Number(editorVideo.currentTime || 0) / duration));
+  const ratio = Math.max(0, Math.min(1, editorCurrentOutputTime() / duration));
   editorTrimPlayhead.style.left = `${ratio * 100}%`;
 }
 
 function trimTimeFromPointer(event) {
+  return sourceTimeFromOutputTime(editorOutputTimeFromPointer(event));
+}
+
+function trimTimeFromPointerForDrag(event) {
   const rect = editorTrimTrack.getBoundingClientRect();
   const ratio = rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
-  return ratio * (editorTrim.duration || 0);
+  const outputTime = ratio * (editorTrim.dragTotalDuration || editorOutputDuration());
+  const selectedOffset = outputTime - (editorTrim.dragOutputStart || 0);
+  return roundTrimTime((editorTrim.dragStart || 0) + selectedOffset);
 }
 
 function zoomEditorTimelineFromWheel(event) {
-  if (!editorTrim.duration || !editorTrimTrackScroll || !editorTrimTrack) {
+  const outputDuration = editorOutputDuration();
+  if (!outputDuration || !editorTrimTrackScroll || !editorTrimTrack) {
     return;
   }
   event.preventDefault();
@@ -1962,7 +2226,7 @@ function zoomEditorTimelineFromWheel(event) {
     ? Math.max(0, Math.min(1, (event.clientX - trackRect.left) / trackRect.width))
     : 0;
   const pointerViewportX = event.clientX - scrollRect.left;
-  const timeAtPointer = pointerRatio * editorTrim.duration;
+  const timeAtPointer = pointerRatio * outputDuration;
   const wheelStep = event.deltaY < 0 ? 0.5 : -0.5;
   const nextZoom = editorTimelineZoom + wheelStep;
 
@@ -1970,7 +2234,7 @@ function zoomEditorTimelineFromWheel(event) {
 
   requestAnimationFrame(() => {
     const nextRect = editorTrimTrack.getBoundingClientRect();
-    const nextX = (timeAtPointer / editorTrim.duration) * nextRect.width;
+    const nextX = (timeAtPointer / outputDuration) * nextRect.width;
     editorTrimTrackScroll.scrollLeft = Math.max(0, nextX - pointerViewportX);
   });
 }
@@ -1980,7 +2244,7 @@ function isEditorTypingTarget(target) {
     return false;
   }
   const tagName = target.tagName ? target.tagName.toLowerCase() : '';
-  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select' || tagName === 'button';
+  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 }
 
 function parseTrimNumber(value, fallback) {
@@ -2094,12 +2358,66 @@ function setEditorZoom(value) {
   updateEditorVideoTransform();
 }
 
+function startEditorVideoDrag(event) {
+  if (!editorVideo.src || event.target.closest?.('.editor-text-overlay')) {
+    return;
+  }
+  pushEditorUndo();
+  event.preventDefault();
+  event.stopPropagation();
+  editorVideoDrag = {
+    active: true,
+    startX: event.clientX,
+    startY: event.clientY,
+    startZoom: editorZoom,
+    startRotation: Number(editorRotation.value || 0)
+  };
+  editorVideoLayer.classList.add('dragging');
+  editorVideoLayer.setPointerCapture(event.pointerId);
+  editorVideoLayer.addEventListener('pointermove', dragEditorVideo);
+  editorVideoLayer.addEventListener('pointerup', stopEditorVideoDrag, { once: true });
+  editorVideoLayer.addEventListener('pointercancel', stopEditorVideoDrag, { once: true });
+}
+
+function dragEditorVideo(event) {
+  if (!editorVideoDrag.active) {
+    return;
+  }
+  const deltaX = event.clientX - editorVideoDrag.startX;
+  const deltaY = event.clientY - editorVideoDrag.startY;
+  const nextZoom = editorVideoDrag.startZoom + (-deltaY * 0.004);
+  const nextRotation = editorVideoDrag.startRotation + (deltaX * 0.35);
+  editorZoom = Math.max(0.5, Math.min(2.5, nextZoom));
+  editorRotation.value = String(Math.max(-180, Math.min(180, Math.round(nextRotation))));
+  updateEditorVideoTransform();
+}
+
+function stopEditorVideoDrag() {
+  editorVideoDrag.active = false;
+  editorVideoLayer.classList.remove('dragging');
+  editorVideoLayer.removeEventListener('pointermove', dragEditorVideo);
+}
+
+function zoomEditorVideoFromWheel(event) {
+  if (!editorVideo.src) {
+    return;
+  }
+  event.preventDefault();
+  pushEditorUndo();
+  const step = event.deltaY < 0 ? 0.08 : -0.08;
+  setEditorZoom(editorZoom + step);
+}
+
 function setEditorTimelineZoom(value) {
   editorTimelineZoom = Math.max(1, Math.min(12, Number(value || 1)));
   editorTrimTrack.style.setProperty('--timeline-zoom', editorTimelineZoom);
   if (editorTextLayerTimeline) {
     editorTextLayerTimeline.style.setProperty('--timeline-zoom', editorTimelineZoom);
   }
+  updateEditorTimelineScale();
+  renderEditorSegments();
+  renderEditorTextLayerTimeline();
+  updateEditorPlayhead();
   editorTimelineZoomValue.textContent = `${Math.round(editorTimelineZoom * 100)}%`;
 }
 
@@ -2108,7 +2426,7 @@ function updateEditorVideoTransform() {
   const safeRotation = Number.isFinite(rotation) ? rotation : 0;
   editorRotationValue.textContent = `${safeRotation} độ`;
   editorZoomValue.textContent = `${Math.round(editorZoom * 100)}%`;
-  editorVideoLayer.style.transform = `rotate(${safeRotation}deg) scale(${editorZoom})`;
+  editorVideo.style.transform = `rotate(${safeRotation}deg) scale(${editorZoom})`;
   updateEditorFrameGuide();
 }
 
@@ -2140,6 +2458,10 @@ function updateEditorFrameGuide() {
   editorFrameGuide.style.left = `${(stageWidth - width) / 2}px`;
   editorFrameGuide.style.top = `${(stageHeight - height) / 2}px`;
   editorFrameGuide.dataset.label = `${size.width}x${size.height}`;
+  editorVideoLayer.style.width = `${width}px`;
+  editorVideoLayer.style.height = `${height}px`;
+  editorVideoLayer.style.left = `${(stageWidth - width) / 2}px`;
+  editorVideoLayer.style.top = `${(stageHeight - height) / 2}px`;
   updateEditorTextOverlay();
 }
 
@@ -2577,10 +2899,9 @@ function startEditorTextTimelineDrag(event) {
     offset: pointerTime - layer.start,
     duration: layer.end - layer.start
   };
-  bar.setPointerCapture(event.pointerId);
-  bar.addEventListener('pointermove', dragEditorTextTimeline);
-  bar.addEventListener('pointerup', stopEditorTextTimelineDrag, { once: true });
-  bar.addEventListener('pointercancel', stopEditorTextTimelineDrag, { once: true });
+  document.addEventListener('pointermove', dragEditorTextTimeline);
+  document.addEventListener('pointerup', stopEditorTextTimelineDrag, { once: true });
+  document.addEventListener('pointercancel', stopEditorTextTimelineDrag, { once: true });
 }
 
 function dragEditorTextTimeline(event) {
@@ -2608,11 +2929,8 @@ function dragEditorTextTimeline(event) {
 }
 
 function stopEditorTextTimelineDrag(event) {
-  const bar = event.currentTarget;
   editorTextTimelineDrag = null;
-  if (bar) {
-    bar.removeEventListener('pointermove', dragEditorTextTimeline);
-  }
+  document.removeEventListener('pointermove', dragEditorTextTimeline);
   updateEditorTextOverlay();
 }
 
@@ -3182,6 +3500,7 @@ initMenu();
 updateSourcePanels();
 initUploadEvents();
 initSplitUploadEvents();
+initManualEditUploadEvents();
 initFormEvents();
 initSplitFormEvents();
 initEditorEvents();
