@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quản lý cắt video</title>
+  <link rel="stylesheet" href="/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/cssd/app.css">
+</head>
+<body>
+<div class="app-shell container-fluid">
+  <header class="app-header card border-0 shadow-sm">
+    <div class="brand">
+      <div class="brand-mark">VC</div>
+      <div>
+        <h1>Quản lý cắt video</h1>
+        <p>Upload hoặc dán link video, phân tích đoạn nổi bật và quản lý lịch sử render.</p>
+      </div>
+    </div>
+    <div class="health" id="health">Đang kiểm tra FFmpeg...</div>
+  </header>
+
+  <nav class="top-menu nav nav-pills" aria-label="Menu chính">
+    <button class="menu-item nav-link active" type="button" data-view="localVideoView">Video Cắt ghép</button>
+    <button class="menu-item nav-link" type="button" data-view="splitVideoView">Video Tách</button>
+  </nav>
+
+  <main>
+    <section class="view active" id="localVideoView">
+      <div class="layout">
+        <section class="panel upload-panel card border-0 shadow-sm">
+          <h2>Video Cắt ghép</h2>
+          <form id="uploadForm">
+            <div class="source-toggle" role="group" aria-label="Nguồn video">
+              <label><input id="localSourceUpload" name="localSourceMode" type="radio" value="upload" checked> Video upload lên</label>
+              <label><input id="localSourceNetwork" name="localSourceMode" type="radio" value="network"> Nguồn video từ mạng</label>
+            </div>
+
+            <div class="source-panel" id="uploadSourcePanel">
+              <label class="dropzone" id="dropzone">
+                <input id="videoFiles" name="videos" type="file" accept="video/*" multiple>
+                <span class="drop-title">Kéo một hoặc nhiều video vào đây</span>
+                <span class="drop-subtitle">Hoặc bấm để chọn file từ máy tính</span>
+              </label>
+              <div class="file-list" id="fileList"></div>
+            </div>
+
+            <div class="source-panel hidden" id="networkSourcePanel">
+              <label class="note-control">Link video
+                <input id="videoUrl" name="videoUrl" type="url" placeholder="Dán link video cần tải tại đây">
+                <span class="hint">Server sẽ tải bản nét nhất có thể, giới hạn tối đa 2K rồi dùng video đó để cắt ghép.</span>
+              </label>
+              <label class="note-control">Cookies.txt nếu link cần đăng nhập
+                <input id="cookiesFilePath" name="cookiesFilePath" type="text" placeholder="Ví dụ: C:\Users\minhm\Downloads\instagram-cookies.txt">
+                <span class="hint">Dùng khi Instagram báo lỗi cookie/DPAPI. Có thể để trống nếu link tải công khai.</span>
+              </label>
+            </div>
+
+            <div class="controls">
+              <label class="control">Số đoạn muốn cắt
+                <input id="clipCount" name="clipCount" type="number" min="1" max="30" value="6">
+              </label>
+              <label class="control">Độ dài mỗi đoạn
+                <input id="clipSeconds" name="clipSeconds" type="number" min="1" max="60" step="0.5" value="5">
+              </label>
+              <label class="control">Tỉ lệ xuất
+                <select id="aspectRatio" name="aspectRatio">
+                  <option value="9:16" selected>9:16 dọc</option>
+                  <option value="16:9">16:9 ngang</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="note-control">Ghi chú khi cắt
+              <textarea id="cutNote" name="cutNote" maxlength="500" placeholder="Ví dụ: cắt 10-25, 00:40-00:55; video 2: 1:20-1:35; bỏ intro, ưu tiên đoạn nói to..."></textarea>
+              <span class="hint">Có thể ghi mốc cụ thể như 10-25, 10s đến 25s, 00:10-00:25 hoặc video 2: 1:20-1:35.</span>
+            </label>
+
+            <div class="actions">
+              <button class="btn btn-primary" id="processButton" type="submit">Phân tích và cắt ghép</button>
+              <button class="btn btn-light secondary" id="refreshButton" type="button">Làm mới danh sách</button>
+            </div>
+          </form>
+
+          <div class="progress-card">
+            <div class="ring" id="ring" style="--angle: 0deg">
+              <div class="percent" id="percent">0%</div>
+            </div>
+            <div>
+              <div class="state" id="state">Sẵn sàng nhận video.</div>
+              <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel history-panel card border-0 shadow-sm">
+          <div class="table-header">
+            <div>
+              <h2>Danh sách video đã cắt</h2>
+              <p id="historySummary">Đang tải lịch sử...</p>
+            </div>
+            <div class="table-actions">
+              <button class="btn btn-outline-danger danger" id="deleteSelectedButton" type="button" disabled>Xóa đã chọn</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table table-hover align-middle">
+              <thead>
+              <tr>
+                <th class="action-cell">Thao tác</th>
+                <th class="select-cell"><input id="selectAllHistory" type="checkbox" aria-label="Chọn tất cả trên trang"></th>
+                <th class="time-cell">Thời gian</th>
+                <th class="file-cell">Video gốc</th>
+                <th class="folder-cell">Thư mục gốc</th>
+                <th class="note-cell">Ghi chú</th>
+                <th class="status-cell">Trạng thái</th>
+                <th class="clips-cell">Số đoạn</th>
+                <th class="duration-cell">Thời lượng</th>
+                <th class="folder-cell">Thư mục kết quả</th>
+              </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="pager"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="splitVideoView">
+      <div class="layout">
+        <section class="panel upload-panel card border-0 shadow-sm">
+          <h2>Video Tách</h2>
+          <form id="splitUploadForm">
+            <div class="source-toggle" role="group" aria-label="Nguồn video">
+              <label><input id="splitSourceUpload" name="splitSourceMode" type="radio" value="upload" checked> Video upload lên</label>
+              <label><input id="splitSourceNetwork" name="splitSourceMode" type="radio" value="network"> Nguồn video từ mạng</label>
+            </div>
+
+            <div class="source-panel" id="splitUploadSourcePanel">
+              <label class="dropzone" id="splitDropzone">
+                <input id="splitVideoFiles" name="videos" type="file" accept="video/*" multiple>
+                <span class="drop-title">Kéo một hoặc nhiều video vào đây</span>
+                <span class="drop-subtitle">Tool sẽ tìm đoạn hay và xuất thành nhiều clip riêng</span>
+              </label>
+              <div class="file-list" id="splitFileList"></div>
+            </div>
+
+            <div class="source-panel hidden" id="splitNetworkSourcePanel">
+              <label class="note-control">Link video
+                <input id="splitVideoUrl" name="videoUrl" type="url" placeholder="Dán link video cần tải tại đây">
+                <span class="hint">Server sẽ tải bản nét nhất có thể, giới hạn tối đa 2K rồi dùng video đó để tách clip.</span>
+              </label>
+              <label class="note-control">Cookies.txt nếu link cần đăng nhập
+                <input id="splitCookiesFilePath" name="cookiesFilePath" type="text" placeholder="Ví dụ: C:\Users\minhm\Downloads\instagram-cookies.txt">
+                <span class="hint">Dùng khi Instagram báo lỗi cookie/DPAPI. Có thể để trống nếu link tải công khai.</span>
+              </label>
+            </div>
+
+            <div class="controls">
+              <label class="control">Số đoạn muốn cắt
+                <input id="splitClipCount" name="clipCount" type="number" min="1" max="30" value="8">
+              </label>
+              <label class="control">Độ dài mỗi đoạn
+                <input id="splitClipSeconds" name="clipSeconds" type="number" min="1" max="60" step="0.5" value="5">
+              </label>
+              <label class="control">Tỉ lệ xuất
+                <select id="splitAspectRatio" name="aspectRatio">
+                  <option value="9:16" selected>9:16 dọc</option>
+                  <option value="16:9">16:9 ngang</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="note-control">Ghi chú khi cắt
+              <textarea id="splitCutNote" name="cutNote" maxlength="500" placeholder="Ví dụ: lấy 8 đoạn hay, mỗi đoạn 5 giây; ưu tiên đoạn có lời nói; hoặc ghi rõ 10-25, video 2: 1:20-1:35..."></textarea>
+              <span class="hint">Có thể ghi mốc cụ thể như 10-25, 00:10-00:25 hoặc video 2: 1:20-1:35.</span>
+            </label>
+
+            <div class="actions">
+              <button class="btn btn-primary" id="splitProcessButton" type="submit">Phân tích và tách clip</button>
+              <button class="btn btn-light secondary" id="splitRefreshButton" type="button">Làm mới danh sách</button>
+            </div>
+          </form>
+
+          <div class="progress-card">
+            <div class="ring" id="splitRing" style="--angle: 0deg">
+              <div class="percent" id="splitPercent">0%</div>
+            </div>
+            <div>
+              <div class="state" id="splitState">Sẵn sàng nhận video.</div>
+              <div class="bar"><div class="bar-fill" id="splitBarFill"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel history-panel card border-0 shadow-sm">
+          <div class="table-header">
+            <div>
+              <h2>Danh sách clip đã tách</h2>
+              <p id="splitHistorySummary">Đang tải lịch sử...</p>
+            </div>
+            <div class="table-actions">
+              <button class="btn btn-outline-danger danger" id="splitDeleteSelectedButton" type="button" disabled>Xóa đã chọn</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table table-hover align-middle split-table">
+              <thead>
+              <tr>
+                <th class="action-cell">Thao tác</th>
+                <th class="select-cell"><input id="splitSelectAllHistory" type="checkbox" aria-label="Chọn tất cả clip trên trang"></th>
+                <th class="time-cell">Thời gian</th>
+                <th class="file-cell">Video gốc</th>
+                <th class="folder-cell">Thư mục gốc</th>
+                <th class="file-cell clip-name-cell">Tên clip</th>
+                <th class="folder-cell">Thư mục clip</th>
+                <th class="range-cell">Mốc cắt</th>
+                <th class="duration-cell">Độ dài</th>
+                <th class="status-cell">Trạng thái</th>
+              </tr>
+              </thead>
+              <tbody id="splitHistoryBody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="splitPager"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>Video Highlight Cutter</span>
+    <span id="workspaceHint">Local workspace</span>
+  </footer>
+</div>
+
+<div class="preview-modal" id="previewModal" aria-hidden="true">
+  <div class="preview-backdrop" id="previewBackdrop"></div>
+  <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+    <div class="preview-header">
+      <h2 id="previewTitle">Xem trước video</h2>
+      <button class="preview-close" id="previewClose" type="button">Đóng</button>
+    </div>
+    <video id="previewVideo" controls playsinline></video>
+  </section>
+</div>
+
+<div class="editor-modal" id="editorModal" aria-hidden="true">
+  <div class="editor-backdrop" id="editorBackdrop"></div>
+  <section class="editor-dialog" role="dialog" aria-modal="true" aria-labelledby="editorTitle">
+    <div class="editor-header">
+      <h2 id="editorTitle">Chỉnh sửa video</h2>
+      <button class="editor-close" id="editorClose" type="button">Đóng</button>
+    </div>
+    <div class="editor-render-overlay" id="editorRenderOverlay" aria-hidden="true" aria-live="assertive">
+      <div class="editor-render-card">
+        <div class="editor-render-main">
+          <div class="editor-render-spinner" aria-hidden="true"></div>
+          <div>
+            <strong id="editorRenderTitle">Đang xuất video</strong>
+            <span id="editorRenderMessage">Đang chuẩn bị dữ liệu chỉnh sửa...</span>
+          </div>
+          <b id="editorRenderPercent">0%</b>
+        </div>
+        <div class="editor-render-bar">
+          <span id="editorRenderFill"></span>
+        </div>
+        <p>Vui lòng chờ render xong, không đóng cửa sổ hoặc bấm thao tác khác.</p>
+      </div>
+    </div>
+    <div class="editor-body">
+      <div class="editor-preview">
+        <div class="editor-stage" id="editorStage">
+          <div class="editor-video-layer" id="editorVideoLayer">
+            <video id="editorVideo" playsinline></video>
+          </div>
+          <div class="editor-frame-guide" id="editorFrameGuide" aria-hidden="true"></div>
+          <div class="editor-text-overlay" id="editorTextOverlay" role="button" tabindex="0" aria-label="Kéo để đặt vị trí text">
+            <span id="editorTextContent"></span>
+            <button class="editor-text-resize" id="editorTextResize" type="button" aria-label="Kéo để phóng to hoặc thu nhỏ text"></button>
+          </div>
+        </div>
+        <audio id="editorAudioPreview"></audio>
+        <div class="trim-panel">
+          <div class="trim-meta">
+            <span id="editorTrimStartLabel">00:00.0</span>
+            <strong id="editorTrimDurationLabel">Đoạn đã chọn: 00:00.0</strong>
+            <span id="editorTrimEndLabel">00:00.0</span>
+          </div>
+          <div class="trim-track-scroll" id="editorTrimTrackScroll">
+            <div class="trim-track" id="editorTrimTrack">
+              <div class="trim-segments" id="editorSegmentsLayer"></div>
+              <div class="trim-selection" id="editorTrimSelection"></div>
+              <div class="trim-playhead" id="editorTrimPlayhead"></div>
+              <button class="trim-handle trim-handle-start" id="editorTrimStartHandle" type="button" aria-label="Kéo điểm bắt đầu"></button>
+              <button class="trim-handle trim-handle-end" id="editorTrimEndHandle" type="button" aria-label="Kéo điểm kết thúc"></button>
+            </div>
+          </div>
+          <div class="trim-actions">
+            <button class="icon-tool" id="editorPlayPause" type="button" title="Phát hoặc tạm dừng" aria-label="Phát hoặc tạm dừng">
+              <span class="tool-icon" id="editorPlayPauseIcon">▶</span>
+            </button>
+            <button class="icon-tool" id="editorUndo" type="button" title="Hoàn tác bước vừa làm" aria-label="Hoàn tác bước vừa làm" disabled>
+              <span class="tool-icon">↶</span>
+            </button>
+            <button class="icon-tool" id="editorZoomOut" type="button" title="Thu nhỏ preview" aria-label="Thu nhỏ preview">
+              <span class="tool-icon">−</span>
+            </button>
+            <button class="icon-tool text-tool" id="editorZoomReset" type="button" title="Đưa zoom về 100%" aria-label="Đưa zoom về 100%">
+              <span id="editorZoomValue">100%</span>
+            </button>
+            <button class="icon-tool" id="editorZoomIn" type="button" title="Phóng to preview" aria-label="Phóng to preview">
+              <span class="tool-icon">+</span>
+            </button>
+            <button class="icon-tool" id="editorTimelineZoomOut" type="button" title="Thu nhỏ timeline" aria-label="Thu nhỏ timeline">
+              <span class="tool-icon">⇤</span>
+            </button>
+            <button class="icon-tool text-tool" id="editorTimelineZoomReset" type="button" title="Timeline 100%" aria-label="Timeline 100%">
+              <span id="editorTimelineZoomValue">100%</span>
+            </button>
+            <button class="icon-tool" id="editorTimelineZoomIn" type="button" title="Phóng to timeline để cắt chính xác" aria-label="Phóng to timeline để cắt chính xác">
+              <span class="tool-icon">⇥</span>
+            </button>
+            <button class="icon-tool" id="editorSetStartAtPlayhead" type="button" title="Đặt điểm bắt đầu tại đầu phát" aria-label="Đặt điểm bắt đầu tại đầu phát">
+              <span class="tool-icon">⟦</span>
+            </button>
+            <button class="icon-tool" id="editorSetEndAtPlayhead" type="button" title="Đặt điểm kết thúc tại đầu phát" aria-label="Đặt điểm kết thúc tại đầu phát">
+              <span class="tool-icon">⟧</span>
+            </button>
+            <button class="icon-tool" id="editorSplitAtPlayhead" type="button" title="Tách đoạn tại đầu phát" aria-label="Tách đoạn tại đầu phát">
+              <span class="tool-icon">✂</span>
+            </button>
+            <button class="icon-tool danger" id="editorDeleteSegment" type="button" title="Xóa đoạn đang chọn" aria-label="Xóa đoạn đang chọn">
+              <span class="tool-icon">⌫</span>
+            </button>
+            <button class="icon-tool" id="editorResetSegments" type="button" title="Khôi phục timeline" aria-label="Khôi phục timeline">
+              <span class="tool-icon">↺</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <form class="editor-form" id="editorForm">
+        <section class="editor-control-section">
+          <div class="editor-section-heading">Xuất video</div>
+          <div class="editor-grid">
+            <label class="control">Chỉnh từ
+              <select id="editorSourceType" name="sourceType">
+                <option value="output" selected>Video kết quả</option>
+                <option value="source">Video gốc</option>
+              </select>
+            </label>
+            <label class="control">Lưu kiểu
+              <select id="editorSaveMode" name="saveMode">
+                <option value="new" selected>Tạo bản ghi mới</option>
+                <option value="overwrite">Ghi đè dòng hiện tại</option>
+              </select>
+            </label>
+            <label class="control">Tinh chỉnh từ giây
+              <input id="editorStart" name="startSeconds" type="number" min="0" step="0.001" placeholder="0">
+            </label>
+            <label class="control">Tinh chỉnh đến giây
+              <input id="editorEnd" name="endSeconds" type="number" min="0" step="0.001" placeholder="Để trống nếu lấy tới cuối">
+            </label>
+            <label class="control">Xoay
+              <div class="range-control">
+                <input id="editorRotation" name="rotationDegrees" type="range" min="-180" max="180" step="1" value="0">
+                <span id="editorRotationValue">0 độ</span>
+              </div>
+            </label>
+            <label class="control">Tỉ lệ khung
+              <select id="editorAspectRatio" name="editorAspectRatio">
+                <option value="keep" selected>Giữ nguyên</option>
+                <option value="16:9">16:9 ngang</option>
+                <option value="9:16">9:16 dọc</option>
+              </select>
+            </label>
+            <label class="control">Độ phân giải xuất
+              <select id="editorOutputResolution" name="outputResolution">
+                <option value="">Giữ nguyên</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="editor-control-section">
+          <div class="editor-section-heading">Text</div>
+          <div class="editor-grid">
+            <label class="control">Căn chữ ngang
+              <select id="editorTextHorizontal" name="textHorizontal">
+                <option value="left">Trái</option>
+                <option value="center" selected>Giữa</option>
+                <option value="right">Phải</option>
+              </select>
+            </label>
+            <label class="control">Căn chữ dọc
+              <select id="editorTextPosition" name="textPosition">
+                <option value="top">Trên</option>
+                <option value="center" selected>Giữa</option>
+                <option value="bottom">Dưới</option>
+              </select>
+            </label>
+            <label class="control">Cỡ chữ
+              <input id="editorTextSize" name="textSize" type="number" min="18" max="160" value="42">
+            </label>
+            <label class="control">Màu chữ
+              <input id="editorTextColor" name="textColor" type="color" value="#ffffff">
+            </label>
+            <label class="control">Kiểu chữ
+              <select id="editorTextFont" name="textFont">
+                <option value="arial" selected>Arial</option>
+                <option value="segoe">Segoe UI</option>
+                <option value="tahoma">Tahoma</option>
+                <option value="verdana">Verdana</option>
+                <option value="impact">Impact</option>
+                <option value="georgia">Georgia</option>
+                <option value="times">Times New Roman</option>
+                <option value="comic">Comic Sans</option>
+              </select>
+            </label>
+            <label class="control">Nền chữ
+              <select id="editorTextBackground" name="textBackground">
+                <option value="dark" selected>Nền đen mờ</option>
+                <option value="none">Không nền</option>
+                <option value="outline">Viền chữ</option>
+                <option value="light">Nền trắng mờ</option>
+                <option value="highlight">Nền vàng</option>
+              </select>
+            </label>
+          </div>
+          <label class="note-control">Text chèn vào video
+            <textarea id="editorOverlayText" name="overlayText" maxlength="200" placeholder="Nhập chữ muốn chèn lên video"></textarea>
+          </label>
+        </section>
+
+        <section class="editor-control-section">
+          <div class="editor-section-heading">Âm thanh</div>
+          <div class="editor-grid">
+            <label class="control">Âm thanh
+              <select id="editorAudioMode" name="audioMode">
+                <option value="keep" selected>Giữ âm thanh gốc</option>
+                <option value="replace">Thay bằng nhạc</option>
+                <option value="mix">Trộn với nhạc</option>
+              </select>
+            </label>
+            <label class="control checkbox-control">
+              <input id="editorMuteOriginal" name="muteOriginalAudio" type="checkbox">
+              <span>Tắt tiếng video gốc</span>
+            </label>
+            <label class="control">Tên hiển thị
+              <input id="editorTitleInput" name="title" type="text" maxlength="180" placeholder="Để trống để tự đặt tên">
+            </label>
+          </div>
+          <label class="note-control">File nhạc
+            <input class="editor-file-input" id="editorMusic" name="music" type="file" accept="audio/*">
+            <span class="hint">Chọn file nhạc nếu muốn thay hoặc trộn âm thanh.</span>
+          </label>
+        </section>
+
+        <div class="editor-status" id="editorStatus">Sẵn sàng chỉnh sửa.</div>
+        <div class="editor-actions">
+          <button class="btn btn-outline-primary" id="editorExportNew" type="button">Xuất bản mới</button>
+          <button class="btn btn-primary" id="editorSave" type="submit">Lưu video</button>
+        </div>
+      </form>
+    </div>
+  </section>
+</div>
+
+<script src="/js/bootstrap.bundle.min.js"></script>
+<script src="/jsd/components/history-list.component.js"></script>
+<script src="/jsd/components/editor-timeline.component.js"></script>
+<script src="/jsd/components/preview-modal.component.js"></script>
+<script src="/jsd/app.js"></script>
+</body>
+</html>
