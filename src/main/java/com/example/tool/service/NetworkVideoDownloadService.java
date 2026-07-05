@@ -3,15 +3,22 @@ package com.example.tool.service;
 import com.example.tool.config.MediaToolProperties;
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -84,6 +91,60 @@ public class NetworkVideoDownloadService {
 		}
 	}
 
+	public List<Path> downloadPlaylistBestUpTo2k(String url, Path outputDirectory, int startIndex, int endIndex, String cookiesFilePath) {
+		String safeUrl = validateUrl(url);
+		int safeStart = Math.max(1, startIndex);
+		int safeEnd = Math.max(safeStart, endIndex);
+		try {
+			Files.createDirectories(outputDirectory);
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không tạo được thư mục tải video từ Facebook.", ex);
+		}
+
+		String baseName = "facebook-batch";
+		String playlistItems = safeStart + "-" + safeEnd;
+		LOGGER.info("Bắt đầu tải hàng loạt Facebook bằng yt-dlp: {}, playlistItems={}", safeUrl, playlistItems);
+		try {
+			DownloadAttempt attempt = runPlaylistDownloadCommand(safeUrl, outputDirectory, baseName, playlistItems, null);
+			Path cookiesFile = resolveCookiesFile(cookiesFilePath);
+			if (!attempt.success() && cookiesFile != null && shouldRetryWithCookies(attempt.output())) {
+				LOGGER.info("Thử tải hàng loạt Facebook lại bằng cookies file: {}", cookiesFile);
+				attempt = runPlaylistDownloadCommandWithCookiesFile(safeUrl, outputDirectory, baseName, playlistItems, cookiesFile);
+			}
+			List<String> browsers = cookieBrowsers();
+			if (!attempt.success() && !browsers.isEmpty() && shouldRetryWithCookies(attempt.output())) {
+				for (String browser : browsers) {
+					DownloadAttempt cookieAttempt = runPlaylistDownloadCommand(safeUrl, outputDirectory, baseName, playlistItems, browser);
+					if (cookieAttempt.success()) {
+						List<Path> downloaded = findDownloadedFiles(outputDirectory, baseName);
+						LOGGER.info("Tải hàng loạt Facebook hoàn tất bằng cookie {}: {} file", browser, downloaded.size());
+						return downloaded;
+					}
+					attempt = cookieAttempt;
+				}
+			}
+			if (!attempt.success()) {
+				if (isFacebookReelsPage(safeUrl) && unsupportedUrl(attempt.output())) {
+					LOGGER.info("yt-dlp không hỗ trợ trực tiếp trang reels. Chuyển sang bóc link reel con từ HTML Facebook.");
+					return downloadFacebookReelsPageByScraping(safeUrl, outputDirectory, safeStart, safeEnd, cookiesFilePath);
+				}
+				LOGGER.warn("yt-dlp tải hàng loạt Facebook thất bại. Output: {}", attempt.output());
+				throw new IllegalStateException(downloadErrorMessage(safeUrl, attempt.output()));
+			}
+			List<Path> downloaded = findDownloadedFiles(outputDirectory, baseName);
+			LOGGER.info("Tải hàng loạt Facebook hoàn tất: {} file", downloaded.size());
+			return downloaded;
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không chạy được yt-dlp. Hãy cài yt-dlp hoặc cấu hình app.media.yt-dlp-path.", ex);
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("Tải hàng loạt Facebook bị gián đoạn.", ex);
+		}
+	}
+
 	private DownloadAttempt runDownloadCommand(String url, Path outputDirectory, String baseName, String cookiesFromBrowser)
 			throws IOException, InterruptedException {
 		List<String> command = new ArrayList<>();
@@ -147,6 +208,128 @@ public class NetworkVideoDownloadService {
 		return new DownloadAttempt(process.exitValue() == 0, output);
 	}
 
+	private DownloadAttempt runPlaylistDownloadCommand(String url, Path outputDirectory, String baseName, String playlistItems, String cookiesFromBrowser)
+			throws IOException, InterruptedException {
+		List<String> command = playlistDownloadCommand(url, outputDirectory, baseName, playlistItems);
+		if (cookiesFromBrowser != null && !cookiesFromBrowser.isBlank()) {
+			int insertAt = command.size() - 1;
+			command.add(insertAt, "--cookies-from-browser");
+			command.add(insertAt + 1, cookiesFromBrowser.trim());
+		}
+		String logSuffix = cookiesFromBrowser == null || cookiesFromBrowser.isBlank() ? "" : "." + safeLogName(cookiesFromBrowser);
+		return runCommand(command, outputDirectory.resolve(baseName + logSuffix + ".download.log"));
+	}
+
+	private DownloadAttempt runPlaylistDownloadCommandWithCookiesFile(String url, Path outputDirectory, String baseName, String playlistItems, Path cookiesFile)
+			throws IOException, InterruptedException {
+		List<String> command = playlistDownloadCommand(url, outputDirectory, baseName, playlistItems);
+		int insertAt = command.size() - 1;
+		command.add(insertAt, "--cookies");
+		command.add(insertAt + 1, cookiesFile.toString());
+		return runCommand(command, outputDirectory.resolve(baseName + ".cookies-file.download.log"));
+	}
+
+	private List<String> playlistDownloadCommand(String url, Path outputDirectory, String baseName, String playlistItems) {
+		List<String> command = new ArrayList<>();
+		command.add(ytDlpPath());
+		command.add("--yes-playlist");
+		command.add("--playlist-items");
+		command.add(playlistItems);
+		command.add("--merge-output-format");
+		command.add("mp4");
+		command.add("--format");
+		command.add(BEST_UP_TO_2K_FORMAT);
+		command.add("--output");
+		command.add(outputDirectory.resolve(baseName + "-%(playlist_index)03d-%(title).80s.%(ext)s").toString());
+		addFfmpegLocation(command);
+		command.add(url);
+		return command;
+	}
+
+	private DownloadAttempt runCommand(List<String> command, Path logFile) throws IOException, InterruptedException {
+		ProcessBuilder builder = new ProcessBuilder(command);
+		builder.redirectErrorStream(true);
+		builder.redirectOutput(logFile.toFile());
+		Process process = builder.start();
+		boolean finished = process.waitFor(DOWNLOAD_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+		String output = Files.isRegularFile(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+		if (!finished) {
+			process.destroyForcibly();
+			return new DownloadAttempt(false, "Tải video quá lâu nên đã dừng. Hãy thử khoảng ít video hơn.\n" + output);
+		}
+		return new DownloadAttempt(process.exitValue() == 0, output);
+	}
+
+	private List<Path> downloadFacebookReelsPageByScraping(String url, Path outputDirectory, int startIndex, int endIndex, String cookiesFilePath)
+			throws IOException, InterruptedException {
+		List<String> reelUrls = extractFacebookReelUrls(url, cookiesFilePath);
+		if (reelUrls.isEmpty()) {
+			throw new IllegalStateException("Không tìm thấy link reel con trong trang Facebook này. Nếu trang cần đăng nhập, hãy dùng cookies.txt hoặc dán từng link reel cụ thể.");
+		}
+		int from = Math.max(0, startIndex - 1);
+		int to = Math.min(reelUrls.size(), endIndex);
+		if (from >= reelUrls.size() || from >= to) {
+			throw new IllegalStateException("Trang chỉ tìm thấy " + reelUrls.size() + " reel, không đủ tới khoảng " + startIndex + "-" + endIndex + ".");
+		}
+		List<String> selectedUrls = reelUrls.subList(from, to);
+		LOGGER.info("Đã bóc được {} reel từ trang Facebook, tải khoảng {}-{} tương ứng {} video.", reelUrls.size(), startIndex, endIndex, selectedUrls.size());
+		List<Path> downloaded = new ArrayList<>();
+		for (int i = 0; i < selectedUrls.size(); i++) {
+			downloaded.add(downloadBestUpTo2k(selectedUrls.get(i), outputDirectory, i + 1, cookiesFilePath));
+		}
+		return downloaded;
+	}
+
+	private List<String> extractFacebookReelUrls(String url, String cookiesFilePath) throws IOException, InterruptedException {
+		HttpClient client = HttpClient.newBuilder()
+				.connectTimeout(Duration.ofSeconds(20))
+				.followRedirects(HttpClient.Redirect.NORMAL)
+				.build();
+		HttpRequest request = HttpRequest.newBuilder(URI.create(facebookBasicReelsUrl(url)))
+				.timeout(Duration.ofSeconds(30))
+				.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+				.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+				.header("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7")
+				.GET()
+				.build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+		if (response.statusCode() >= 400) {
+			throw new IllegalStateException("Facebook trả lỗi HTTP " + response.statusCode() + " khi đọc trang reels.");
+		}
+		String html = response.body() == null ? "" : response.body()
+				.replace("\\/", "/")
+				.replace("\\u0025", "%")
+				.replace("&amp;", "&")
+				.replace("\\\"", "\"");
+		Set<String> ids = new LinkedHashSet<>();
+		addMatches(ids, html, Pattern.compile("facebook\\.com/(?:[^\"'<>\\s]+/)?reel/(\\d+)", Pattern.CASE_INSENSITIVE));
+		addMatches(ids, html, Pattern.compile("/(?:[^\"'<>\\s]+/)?reel/(\\d+)", Pattern.CASE_INSENSITIVE));
+		addMatches(ids, html, Pattern.compile("\"reel_id\"\\s*:\\s*\"?(\\d+)\"?", Pattern.CASE_INSENSITIVE));
+		addMatches(ids, html, Pattern.compile("\"video_id\"\\s*:\\s*\"?(\\d+)\"?", Pattern.CASE_INSENSITIVE));
+		return ids.stream()
+				.map(id -> "https://www.facebook.com/reel/" + id + "/")
+				.collect(Collectors.toList());
+	}
+
+	private String facebookBasicReelsUrl(String url) {
+		URI uri = URI.create(url);
+		String path = uri.getPath() == null || uri.getPath().isBlank() ? "/reels/" : uri.getPath();
+		if (!path.endsWith("/")) {
+			path += "/";
+		}
+		return "https://mbasic.facebook.com" + path;
+	}
+
+	private void addMatches(Set<String> ids, String html, Pattern pattern) {
+		Matcher matcher = pattern.matcher(html);
+		while (matcher.find() && ids.size() < 300) {
+			String id = matcher.group(1);
+			if (id != null && id.matches("\\d{5,}")) {
+				ids.add(id);
+			}
+		}
+	}
+
 	private String validateUrl(String url) {
 		if (url == null || url.isBlank()) {
 			throw new IllegalArgumentException("Hãy nhập link video.");
@@ -163,7 +346,7 @@ public class NetworkVideoDownloadService {
 		String host = URI.create(url).getHost();
 		String normalizedHost = host == null ? "" : host.toLowerCase(Locale.ROOT);
 		String normalizedOutput = output == null ? "" : output.toLowerCase(Locale.ROOT);
-		return normalizedHost.contains("instagram.com")
+		return (normalizedHost.contains("instagram.com") || normalizedHost.contains("facebook.com"))
 				&& (normalizedOutput.contains("cookies-from-browser")
 				|| normalizedOutput.contains("empty media response")
 				|| normalizedOutput.contains("login")
@@ -179,6 +362,17 @@ public class NetworkVideoDownloadService {
 				|| normalizedOutput.contains("not logged in")
 				|| normalizedOutput.contains("authentication")
 				|| normalizedOutput.contains("dpapi");
+	}
+
+	private boolean unsupportedUrl(String output) {
+		return output != null && output.toLowerCase(Locale.ROOT).contains("unsupported url");
+	}
+
+	private boolean isFacebookReelsPage(String url) {
+		URI uri = URI.create(url);
+		String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+		String path = uri.getPath() == null ? "" : uri.getPath().toLowerCase(Locale.ROOT);
+		return host.contains("facebook.com") && (path.endsWith("/reels/") || path.endsWith("/reels"));
 	}
 
 	private String downloadErrorMessage(String url, String output) {
@@ -255,6 +449,24 @@ public class NetworkVideoDownloadService {
 			throw new IllegalStateException("Không đọc được file video vừa tải.", ex);
 		}
 		throw new IllegalStateException("Không tìm thấy file video sau khi tải từ mạng.");
+	}
+
+	private List<Path> findDownloadedFiles(Path outputDirectory, String baseName) {
+		try (var stream = Files.list(outputDirectory)) {
+			List<Path> matches = stream
+					.filter(Files::isRegularFile)
+					.filter(path -> path.getFileName().toString().startsWith(baseName + "-"))
+					.filter(this::isVideoFile)
+					.sorted(Comparator.comparing(path -> path.getFileName().toString()))
+					.collect(Collectors.toList());
+			if (!matches.isEmpty()) {
+				return matches;
+			}
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không đọc được file video vừa tải.", ex);
+		}
+		throw new IllegalStateException("Không tìm thấy file video nào sau khi tải hàng loạt Facebook.");
 	}
 
 	private boolean isVideoFile(Path path) {

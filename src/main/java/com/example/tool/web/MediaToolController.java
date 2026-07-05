@@ -4,6 +4,7 @@ import com.example.tool.model.BatchRequest;
 import com.example.tool.model.BatchResult;
 import com.example.tool.model.DownloadRequest;
 import com.example.tool.model.DownloadResult;
+import com.example.tool.model.FacebookBatchRequest;
 import com.example.tool.model.HealthResult;
 import com.example.tool.model.HighlightDeleteRequest;
 import com.example.tool.model.HighlightDeleteResult;
@@ -113,6 +114,56 @@ public class MediaToolController {
 	@PostMapping(value = "/edit-videos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	public VideoEditResult createEditableVideo(@RequestParam("video") MultipartFile video) {
 		return highlightService.createEditableVideo(video);
+	}
+
+	@PostMapping("/edit-videos/from-url")
+	public VideoEditResult createEditableVideoFromUrl(@RequestBody NetworkVideoRequest request) {
+		return highlightService.createEditableVideoFromUrls(
+				request.normalizedUrls(),
+				request.getCookiesFilePath());
+	}
+
+	@GetMapping("/edit-videos")
+	public HighlightHistoryPage manualEditHistory(
+			@RequestParam(value = "page", defaultValue = "1") int page,
+			@RequestParam(value = "size", defaultValue = "10") int size) {
+		return highlightService.manualEditHistory(page, size);
+	}
+
+	@PostMapping("/edit-videos/delete")
+	public HighlightDeleteResult deleteManualEditVideos(@RequestBody HighlightDeleteRequest request) {
+		return highlightService.deleteManualEditVideos(request.getJobIds());
+	}
+
+	@PostMapping("/facebook-batches")
+	public HighlightJobStatus createFacebookBatch(@RequestBody FacebookBatchRequest request) {
+		return highlightService.createFacebookBatchDownload(
+				request.getReelsUrl(),
+				request.getStartIndex(),
+				request.getEndIndex(),
+				request.getCookiesFilePath());
+	}
+
+	@GetMapping("/facebook-batches/{jobId}")
+	public HighlightJobStatus facebookBatchStatus(@PathVariable String jobId) {
+		return highlightService.status(jobId);
+	}
+
+	@GetMapping("/facebook-batches")
+	public HighlightHistoryPage facebookBatchHistory(
+			@RequestParam(value = "page", defaultValue = "1") int page,
+			@RequestParam(value = "size", defaultValue = "10") int size) {
+		return highlightService.facebookBatchHistory(page, size);
+	}
+
+	@PostMapping("/facebook-batches/delete")
+	public HighlightDeleteResult deleteFacebookBatches(@RequestBody HighlightDeleteRequest request) {
+		return highlightService.deleteFacebookBatchVideos(request.getJobIds());
+	}
+
+	@PostMapping("/facebook-batches/{jobId}/open-location")
+	public OpenLocationResult openFacebookBatchLocation(@PathVariable String jobId) {
+		return openLocation(highlightService.sourceDirectory(jobId));
 	}
 
 	@PostMapping(value = "/highlights", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

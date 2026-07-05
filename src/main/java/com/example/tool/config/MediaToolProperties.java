@@ -1,5 +1,7 @@
 package com.example.tool.config;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "app.media")
@@ -21,7 +23,7 @@ public class MediaToolProperties {
 	}
 
 	public String getFfmpegPath() {
-		return ffmpegPath;
+		return resolveExecutable(ffmpegPath);
 	}
 
 	public void setFfmpegPath(String ffmpegPath) {
@@ -29,7 +31,7 @@ public class MediaToolProperties {
 	}
 
 	public String getFfprobePath() {
-		return ffprobePath;
+		return resolveExecutable(ffprobePath);
 	}
 
 	public void setFfprobePath(String ffprobePath) {
@@ -37,7 +39,7 @@ public class MediaToolProperties {
 	}
 
 	public String getYtDlpPath() {
-		return ytDlpPath;
+		return resolveExecutable(ytDlpPath);
 	}
 
 	public void setYtDlpPath(String ytDlpPath) {
@@ -58,5 +60,42 @@ public class MediaToolProperties {
 
 	public void setYtDlpCookiesFile(String ytDlpCookiesFile) {
 		this.ytDlpCookiesFile = ytDlpCookiesFile;
+	}
+
+	private String resolveExecutable(String configuredPath) {
+		if (configuredPath == null || configuredPath.isBlank()) {
+			return configuredPath;
+		}
+		Path configured = Path.of(configuredPath.trim());
+		if (configured.isAbsolute() || !looksLikePath(configuredPath)) {
+			return configuredPath;
+		}
+		Path userDir = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+		String normalized = configuredPath.replace("\\", "/");
+		for (Path base : candidateBases(userDir)) {
+			Path candidate = base.resolve(configured).toAbsolutePath().normalize();
+			if (Files.isRegularFile(candidate)) {
+				return candidate.toString();
+			}
+			if (normalized.startsWith("../vendor/")) {
+				Path vendorCandidate = base.resolve(normalized.substring(3)).toAbsolutePath().normalize();
+				if (Files.isRegularFile(vendorCandidate)) {
+					return vendorCandidate.toString();
+				}
+			}
+		}
+		return configuredPath;
+	}
+
+	private boolean looksLikePath(String value) {
+		return value.contains("/") || value.contains("\\");
+	}
+
+	private Path[] candidateBases(Path userDir) {
+		Path parent = userDir.getParent();
+		Path childTool = userDir.resolve("tool");
+		return parent == null
+				? new Path[] { userDir, childTool }
+				: new Path[] { userDir, parent, childTool };
 	}
 }

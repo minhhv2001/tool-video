@@ -56,10 +56,37 @@ const manualEditFileList = document.querySelector('#manualEditFileList');
 const manualEditForm = document.querySelector('#manualEditForm');
 const manualEditOpenButton = document.querySelector('#manualEditOpenButton');
 const manualEditClearButton = document.querySelector('#manualEditClearButton');
+const manualEditSourceUpload = document.querySelector('#manualEditSourceUpload');
+const manualEditSourceNetwork = document.querySelector('#manualEditSourceNetwork');
+const manualEditUploadSourcePanel = document.querySelector('#manualEditUploadSourcePanel');
+const manualEditNetworkSourcePanel = document.querySelector('#manualEditNetworkSourcePanel');
+const manualEditVideoUrl = document.querySelector('#manualEditVideoUrl');
+const manualEditCookiesFilePath = document.querySelector('#manualEditCookiesFilePath');
+const manualEditHistoryBody = document.querySelector('#manualEditHistoryBody');
+const manualEditHistorySummary = document.querySelector('#manualEditHistorySummary');
+const manualEditPager = document.querySelector('#manualEditPager');
+const manualEditDeleteSelectedButton = document.querySelector('#manualEditDeleteSelectedButton');
+const manualEditSelectAllHistory = document.querySelector('#manualEditSelectAllHistory');
 const manualEditRing = document.querySelector('#manualEditRing');
 const manualEditPercent = document.querySelector('#manualEditPercent');
 const manualEditBarFill = document.querySelector('#manualEditBarFill');
 const manualEditState = document.querySelector('#manualEditState');
+const facebookBatchForm = document.querySelector('#facebookBatchForm');
+const facebookBatchUrl = document.querySelector('#facebookBatchUrl');
+const facebookBatchStart = document.querySelector('#facebookBatchStart');
+const facebookBatchEnd = document.querySelector('#facebookBatchEnd');
+const facebookBatchCookiesFilePath = document.querySelector('#facebookBatchCookiesFilePath');
+const facebookBatchDownloadButton = document.querySelector('#facebookBatchDownloadButton');
+const facebookBatchRefreshButton = document.querySelector('#facebookBatchRefreshButton');
+const facebookBatchHistoryBody = document.querySelector('#facebookBatchHistoryBody');
+const facebookBatchHistorySummary = document.querySelector('#facebookBatchHistorySummary');
+const facebookBatchPager = document.querySelector('#facebookBatchPager');
+const facebookBatchDeleteSelectedButton = document.querySelector('#facebookBatchDeleteSelectedButton');
+const facebookBatchSelectAllHistory = document.querySelector('#facebookBatchSelectAllHistory');
+const facebookBatchRing = document.querySelector('#facebookBatchRing');
+const facebookBatchPercent = document.querySelector('#facebookBatchPercent');
+const facebookBatchBarFill = document.querySelector('#facebookBatchBarFill');
+const facebookBatchState = document.querySelector('#facebookBatchState');
 const previewModal = document.querySelector('#previewModal');
 const previewBackdrop = document.querySelector('#previewBackdrop');
 const previewClose = document.querySelector('#previewClose');
@@ -152,6 +179,13 @@ let splitCurrentHistoryItems = [];
 let splitSelectedClipKeys = new Set();
 let manualEditFile = null;
 let manualEditPreviewUrl = '';
+let manualEditCurrentPage = 1;
+let manualEditCurrentHistoryItems = [];
+let manualEditSelectedIds = new Set();
+let facebookBatchPollTimer = null;
+let facebookBatchCurrentPage = 1;
+let facebookBatchCurrentHistoryItems = [];
+let facebookBatchSelectedIds = new Set();
 let currentEditor = null;
 let editorTrim = { duration: 0, start: 0, end: 0, dragging: null, dragOffset: 0, dragOutputStart: 0, dragTotalDuration: 0, dragStart: 0, dragEnd: 0, dragTimelineWidth: 0 };
 let editorSegments = [];
@@ -201,11 +235,21 @@ function splitUsesNetworkSource() {
   return splitSourceNetwork.checked;
 }
 
+function manualEditUsesNetworkSource() {
+  return manualEditSourceNetwork && manualEditSourceNetwork.checked;
+}
+
 function updateSourcePanels() {
   uploadSourcePanel.classList.toggle('hidden', localUsesNetworkSource());
   networkSourcePanel.classList.toggle('hidden', !localUsesNetworkSource());
   splitUploadSourcePanel.classList.toggle('hidden', splitUsesNetworkSource());
   splitNetworkSourcePanel.classList.toggle('hidden', !splitUsesNetworkSource());
+  if (manualEditUploadSourcePanel && manualEditNetworkSourcePanel) {
+    manualEditUploadSourcePanel.classList.toggle('hidden', manualEditUsesNetworkSource());
+    manualEditNetworkSourcePanel.classList.toggle('hidden', !manualEditUsesNetworkSource());
+    manualEditOpenButton.disabled = manualEditUsesNetworkSource() ? false : !manualEditFile;
+    manualEditClearButton.disabled = manualEditUsesNetworkSource() || !manualEditFile;
+  }
 }
 
 function setProgress(value, message, type = '') {
@@ -239,6 +283,19 @@ function manualEditSetProgress(value, message, type = '') {
   manualEditState.className = `state ${type}`;
   manualEditState.textContent = message;
   manualEditRing.classList.toggle('spin', type !== 'ok' && type !== 'error' && safe > 0 && safe < 100);
+}
+
+function facebookBatchSetProgress(value, message, type = '') {
+  if (!facebookBatchRing) {
+    return;
+  }
+  const safe = Math.max(0, Math.min(100, Math.round(value || 0)));
+  facebookBatchRing.style.setProperty('--angle', `${safe * 3.6}deg`);
+  facebookBatchPercent.textContent = `${safe}%`;
+  facebookBatchBarFill.style.width = `${safe}%`;
+  facebookBatchState.className = `state ${type}`;
+  facebookBatchState.textContent = message;
+  facebookBatchRing.classList.toggle('spin', type !== 'ok' && type !== 'error' && safe > 0 && safe < 100);
 }
 
 function fileKey(file) {
@@ -379,8 +436,8 @@ function renderManualEditFile() {
     return;
   }
   manualEditFileList.innerHTML = '';
-  manualEditOpenButton.disabled = !manualEditFile;
-  manualEditClearButton.disabled = !manualEditFile;
+  manualEditOpenButton.disabled = manualEditUsesNetworkSource() ? false : !manualEditFile;
+  manualEditClearButton.disabled = manualEditUsesNetworkSource() || !manualEditFile;
   if (!manualEditFile) {
     manualEditSetProgress(0, 'Sẵn sàng nhận video để chỉnh sửa.');
     return;
@@ -486,6 +543,123 @@ async function loadHistory(page = currentPage) {
   renderPager(data.page, data.totalPages);
 }
 
+async function loadManualEditHistory(page = manualEditCurrentPage) {
+  manualEditCurrentPage = page;
+  const response = await fetch(`/api/edit-videos?page=${page}&size=${pageSize}`);
+  const data = await response.json();
+  if (data.items.length === 0 && data.totalItems > 0 && page > 1) {
+    return loadManualEditHistory(page - 1);
+  }
+  manualEditSelectedIds.clear();
+  manualEditCurrentHistoryItems = data.items || [];
+  manualEditHistorySummary.textContent = `${data.totalItems} bản ghi, trang ${data.page}/${Math.max(data.totalPages, 1)}`;
+  manualEditHistoryBody.innerHTML = '';
+  if (!data.items.length) {
+    manualEditHistoryBody.appendChild(HistoryListComponent
+      ? HistoryListComponent.renderEmptyRow('Chưa có video edit nào.', 10)
+      : document.createElement('tr'));
+    if (!HistoryListComponent) {
+      manualEditHistoryBody.innerHTML = '<tr><td colspan="10">Chưa có video edit nào.</td></tr>';
+    }
+  } else if (HistoryListComponent) {
+    data.items.forEach((item) => {
+      manualEditHistoryBody.appendChild(HistoryListComponent.renderHighlightRow(item, historyListHelpers()));
+    });
+  } else {
+    data.items.forEach((item) => {
+      const tr = document.createElement('tr');
+      const files = (item.inputFileNames || []).join(', ');
+      const jobId = encodeURIComponent(item.jobId);
+      const previewUrl = item.downloadUrl ? `/api/highlights/${jobId}/preview` : '';
+      tr.innerHTML = `
+        <td class="action-cell">
+          <div class="row-actions">
+            ${previewUrl ? `<button class="preview-row btn btn-sm btn-outline-info" type="button" data-preview-url="${previewUrl}" data-preview-title="${escapeHtml(files || 'Video edit')}">Xem</button>` : ''}
+            ${item.downloadUrl ? `<a class="download btn btn-sm btn-success" href="${item.downloadUrl}">Tải</a>` : ''}
+            ${previewUrl ? `<button class="edit-row btn btn-sm btn-outline-primary" type="button" data-edit-url="/api/highlights/${jobId}/edit" data-preview-url="${previewUrl}" data-edit-title="${escapeHtml(files || 'Video edit')}">Sửa</button>` : ''}
+            <button class="delete-row btn btn-sm btn-outline-danger" type="button" data-job-id="${escapeHtml(item.jobId)}">Xóa</button>
+          </div>
+        </td>
+        <td class="select-cell"><input class="manual-edit-history-check" type="checkbox" data-job-id="${escapeHtml(item.jobId)}"></td>
+        <td class="time-cell">${formatDate(item.createdAt)}</td>
+        <td class="file-cell">${renderCompactText(files)}</td>
+        <td class="folder-cell"><button class="open-location-row folder-action btn btn-sm btn-outline-success" type="button" data-open-url="/api/highlights/${jobId}/open-location?target=source">${folderIcon()}<span>Gốc</span></button></td>
+        <td class="note-cell">${renderCompactText(item.cutNote || '-')}</td>
+        <td class="status-cell"><span class="status ${item.status}">${statusText(item.status)}</span></td>
+        <td class="clips-cell">${item.clipsUsed || '-'}</td>
+        <td class="duration-cell">${item.totalDurationSeconds ? `${Number(item.totalDurationSeconds).toFixed(1)} giây` : '-'}</td>
+        <td class="folder-cell">${item.downloadUrl ? `<button class="open-location-row folder-action btn btn-sm btn-outline-success" type="button" data-open-url="/api/highlights/${jobId}/open-location?target=output">${folderIcon()}<span>Kết quả</span></button>` : '-'}</td>
+      `;
+      manualEditHistoryBody.appendChild(tr);
+    });
+  }
+  bindManualEditHistoryActions();
+  updateManualEditHistorySelection();
+  if (HistoryListComponent) {
+    HistoryListComponent.renderPager(manualEditPager, data.page, data.totalPages, loadManualEditHistory);
+  } else {
+    manualEditPager.innerHTML = '';
+  }
+}
+
+async function loadFacebookBatchHistory(page = facebookBatchCurrentPage) {
+  if (!facebookBatchHistoryBody) {
+    return;
+  }
+  facebookBatchCurrentPage = page;
+  const response = await fetch(`/api/facebook-batches?page=${page}&size=${pageSize}`);
+  const data = await response.json();
+  if (data.items.length === 0 && data.totalItems > 0 && page > 1) {
+    return loadFacebookBatchHistory(page - 1);
+  }
+  facebookBatchSelectedIds.clear();
+  facebookBatchCurrentHistoryItems = data.items || [];
+  facebookBatchHistorySummary.textContent = `${data.totalItems} batch, trang ${data.page}/${Math.max(data.totalPages, 1)}`;
+  facebookBatchHistoryBody.innerHTML = '';
+  if (!data.items.length) {
+    facebookBatchHistoryBody.appendChild(HistoryListComponent
+      ? HistoryListComponent.renderEmptyRow('Chưa có batch Facebook nào được tải.', 9)
+      : document.createElement('tr'));
+    if (!HistoryListComponent) {
+      facebookBatchHistoryBody.innerHTML = '<tr><td colspan="9">Chưa có batch Facebook nào được tải.</td></tr>';
+    }
+  } else {
+    data.items.forEach((item) => {
+      facebookBatchHistoryBody.appendChild(renderFacebookBatchRow(item));
+    });
+  }
+  bindFacebookBatchHistoryActions();
+  updateFacebookBatchSelection();
+  if (HistoryListComponent) {
+    HistoryListComponent.renderPager(facebookBatchPager, data.page, data.totalPages, loadFacebookBatchHistory);
+  } else {
+    facebookBatchPager.innerHTML = '';
+  }
+}
+
+function renderFacebookBatchRow(item) {
+  const tr = document.createElement('tr');
+  const files = (item.inputFileNames || []).join(', ');
+  const jobId = encodeURIComponent(item.jobId);
+  tr.innerHTML = `
+    <td class="action-cell">
+      <div class="row-actions">
+        <button class="open-location-row folder-action btn btn-sm btn-outline-success" type="button" data-open-url="/api/facebook-batches/${jobId}/open-location" title="Mở thư mục video đã tải">${folderIcon()}<span>Thư mục</span></button>
+        <button class="delete-row btn btn-sm btn-outline-danger" type="button" data-job-id="${escapeHtml(item.jobId)}">Xóa</button>
+      </div>
+    </td>
+    <td class="select-cell"><input class="facebook-batch-history-check" type="checkbox" data-job-id="${escapeHtml(item.jobId)}" aria-label="Chọn batch này"></td>
+    <td class="time-cell">${formatDate(item.createdAt)}</td>
+    <td class="file-cell">${renderCompactText(files || '-')}</td>
+    <td class="folder-cell"><button class="open-location-row folder-action btn btn-sm btn-outline-success" type="button" data-open-url="/api/facebook-batches/${jobId}/open-location" title="Mở thư mục video đã tải">${folderIcon()}<span>Mở</span></button></td>
+    <td class="note-cell">${renderCompactText(item.cutNote || '-')}</td>
+    <td class="status-cell"><span class="status ${item.status}">${statusText(item.status)}</span></td>
+    <td class="clips-cell">${item.clipsUsed || '-'}</td>
+    <td class="duration-cell">${item.totalDurationSeconds ? `${Number(item.totalDurationSeconds).toFixed(1)} giây` : '-'}</td>
+  `;
+  return tr;
+}
+
 async function loadSplitHistory(page = splitCurrentPage) {
   splitCurrentPage = page;
   const response = await fetch(`/api/split-highlights?page=${page}&size=${pageSize}`);
@@ -576,6 +750,62 @@ function bindHistoryActions() {
     button.addEventListener('click', () => openEditor(button.dataset.editUrl, button.dataset.previewUrl, button.dataset.editTitle, 'highlight'));
   });
   historyBody.querySelectorAll('.text-toggle').forEach((button) => {
+    button.addEventListener('click', () => toggleCompactText(button));
+  });
+}
+
+function bindManualEditHistoryActions() {
+  manualEditHistoryBody.querySelectorAll('.history-check, .manual-edit-history-check').forEach((checkbox) => {
+    checkbox.classList.add('manual-edit-history-check');
+    checkbox.addEventListener('change', () => {
+      const jobId = checkbox.dataset.jobId;
+      if (checkbox.checked) {
+        manualEditSelectedIds.add(jobId);
+      } else {
+        manualEditSelectedIds.delete(jobId);
+      }
+      updateManualEditHistorySelection();
+    });
+  });
+  manualEditHistoryBody.querySelectorAll('.delete-row').forEach((button) => {
+    button.addEventListener('click', () => deleteManualEditJobs([button.dataset.jobId]));
+  });
+  manualEditHistoryBody.querySelectorAll('.open-location-row').forEach((button) => {
+    button.addEventListener('click', () => openFileLocation(button.dataset.openUrl, manualEditSetProgress));
+  });
+  manualEditHistoryBody.querySelectorAll('.preview-row').forEach((button) => {
+    button.addEventListener('click', () => openPreview(button.dataset.previewUrl, button.dataset.previewTitle));
+  });
+  manualEditHistoryBody.querySelectorAll('.edit-row').forEach((button) => {
+    button.addEventListener('click', () => openEditor(button.dataset.editUrl, button.dataset.previewUrl, button.dataset.editTitle, 'manual'));
+  });
+  manualEditHistoryBody.querySelectorAll('.text-toggle').forEach((button) => {
+    button.addEventListener('click', () => toggleCompactText(button));
+  });
+}
+
+function bindFacebookBatchHistoryActions() {
+  if (!facebookBatchHistoryBody) {
+    return;
+  }
+  facebookBatchHistoryBody.querySelectorAll('.facebook-batch-history-check').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const jobId = checkbox.dataset.jobId;
+      if (checkbox.checked) {
+        facebookBatchSelectedIds.add(jobId);
+      } else {
+        facebookBatchSelectedIds.delete(jobId);
+      }
+      updateFacebookBatchSelection();
+    });
+  });
+  facebookBatchHistoryBody.querySelectorAll('.delete-row').forEach((button) => {
+    button.addEventListener('click', () => deleteFacebookBatchJobs([button.dataset.jobId]));
+  });
+  facebookBatchHistoryBody.querySelectorAll('.open-location-row').forEach((button) => {
+    button.addEventListener('click', () => openFileLocation(button.dataset.openUrl, facebookBatchSetProgress));
+  });
+  facebookBatchHistoryBody.querySelectorAll('.text-toggle').forEach((button) => {
     button.addEventListener('click', () => toggleCompactText(button));
   });
 }
@@ -705,6 +935,25 @@ function updateHistorySelection() {
   deleteSelectedButton.disabled = selectedHistoryIds.size === 0;
 }
 
+function updateManualEditHistorySelection() {
+  const pageIds = manualEditCurrentHistoryItems.map((item) => item.jobId).filter(Boolean);
+  const checkedCount = pageIds.filter((jobId) => manualEditSelectedIds.has(jobId)).length;
+  manualEditSelectAllHistory.checked = pageIds.length > 0 && checkedCount === pageIds.length;
+  manualEditSelectAllHistory.indeterminate = checkedCount > 0 && checkedCount < pageIds.length;
+  manualEditDeleteSelectedButton.disabled = manualEditSelectedIds.size === 0;
+}
+
+function updateFacebookBatchSelection() {
+  if (!facebookBatchSelectAllHistory) {
+    return;
+  }
+  const pageIds = facebookBatchCurrentHistoryItems.map((item) => item.jobId).filter(Boolean);
+  const checkedCount = pageIds.filter((jobId) => facebookBatchSelectedIds.has(jobId)).length;
+  facebookBatchSelectAllHistory.checked = pageIds.length > 0 && checkedCount === pageIds.length;
+  facebookBatchSelectAllHistory.indeterminate = checkedCount > 0 && checkedCount < pageIds.length;
+  facebookBatchDeleteSelectedButton.disabled = facebookBatchSelectedIds.size === 0;
+}
+
 function updateSplitHistorySelection() {
   const pageKeys = splitCurrentHistoryItems
     .map((item) => splitClipKey(item.jobId, item.clipIndex))
@@ -741,6 +990,64 @@ async function deleteHistoryJobs(jobIds) {
   } catch (error) {
     setProgress(100, error.message, 'error');
     updateHistorySelection();
+  }
+}
+
+async function deleteManualEditJobs(jobIds) {
+  const safeIds = Array.from(new Set((jobIds || []).filter(Boolean)));
+  if (!safeIds.length) {
+    return;
+  }
+  const ok = confirm(`Xóa ${safeIds.length} video edit khỏi ổ cứng? Video gốc, file tạm và output sẽ bị xóa sạch.`);
+  if (!ok) {
+    return;
+  }
+  manualEditDeleteSelectedButton.disabled = true;
+  try {
+    const response = await fetch('/api/edit-videos/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobIds: safeIds })
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Không xóa được lịch sử edit.');
+    }
+    manualEditSelectedIds.clear();
+    manualEditSetProgress(0, `Đã xóa ${result.deletedCount} video edit khỏi ổ cứng.`);
+    await loadManualEditHistory(manualEditCurrentPage);
+  } catch (error) {
+    manualEditSetProgress(100, error.message, 'error');
+    updateManualEditHistorySelection();
+  }
+}
+
+async function deleteFacebookBatchJobs(jobIds) {
+  const safeIds = Array.from(new Set((jobIds || []).filter(Boolean)));
+  if (!safeIds.length) {
+    return;
+  }
+  const ok = confirm(`Xóa ${safeIds.length} batch Facebook khỏi ổ cứng? Toàn bộ video đã tải trong batch sẽ bị xóa sạch.`);
+  if (!ok) {
+    return;
+  }
+  facebookBatchDeleteSelectedButton.disabled = true;
+  try {
+    const response = await fetch('/api/facebook-batches/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobIds: safeIds })
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Không xóa được batch Facebook.');
+    }
+    facebookBatchSelectedIds.clear();
+    facebookBatchSetProgress(0, `Đã xóa ${result.deletedCount} batch Facebook khỏi ổ cứng.`);
+    await loadFacebookBatchHistory(facebookBatchCurrentPage);
+  } catch (error) {
+    facebookBatchSetProgress(100, error.message, 'error');
+    updateFacebookBatchSelection();
   }
 }
 
@@ -894,6 +1201,32 @@ function uploadManualEditVideo(data) {
   });
 }
 
+async function uploadManualEditNetworkVideo(payload) {
+  const response = await fetch('/api/edit-videos/from-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || 'Không tải được video từ link để chỉnh sửa.');
+  }
+  return result;
+}
+
+async function uploadFacebookBatchJob(payload) {
+  const response = await fetch('/api/facebook-batches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || 'Không tạo được job tải hàng loạt Facebook.');
+  }
+  return result;
+}
+
 function uploadSplitJob(data) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -963,6 +1296,38 @@ async function pollJob(jobId) {
     pollTimer = null;
     setProgress(100, error.message, 'error');
     processButton.disabled = false;
+  }
+}
+
+async function pollFacebookBatchJob(jobId) {
+  try {
+    const response = await fetch(`/api/facebook-batches/${jobId}`);
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Không đọc được tiến trình tải Facebook.');
+    }
+    if (result.status === 'ready') {
+      clearInterval(facebookBatchPollTimer);
+      facebookBatchPollTimer = null;
+      facebookBatchSetProgress(100, result.phase || 'Đã tải xong batch Facebook.', 'ok');
+      facebookBatchDownloadButton.disabled = false;
+      await loadFacebookBatchHistory(1);
+      return;
+    }
+    if (result.status === 'error') {
+      clearInterval(facebookBatchPollTimer);
+      facebookBatchPollTimer = null;
+      facebookBatchSetProgress(100, result.error || 'Tải hàng loạt Facebook thất bại.', 'error');
+      facebookBatchDownloadButton.disabled = false;
+      await loadFacebookBatchHistory(1);
+      return;
+    }
+    facebookBatchSetProgress(result.progress, result.phase || 'Đang tải hàng loạt Facebook...');
+  } catch (error) {
+    clearInterval(facebookBatchPollTimer);
+    facebookBatchPollTimer = null;
+    facebookBatchSetProgress(100, error.message, 'error');
+    facebookBatchDownloadButton.disabled = false;
   }
 }
 
@@ -1052,6 +1417,9 @@ function initManualEditUploadEvents() {
   if (!manualEditDropzone) {
     return;
   }
+  [manualEditSourceUpload, manualEditSourceNetwork].forEach((input) => {
+    input.addEventListener('change', updateSourcePanels);
+  });
   ['dragenter', 'dragover'].forEach((eventName) => {
     manualEditDropzone.addEventListener(eventName, (event) => {
       event.preventDefault();
@@ -1082,29 +1450,119 @@ function initManualEditUploadEvents() {
 
   manualEditClearButton.addEventListener('click', clearManualEditFile);
 
+  manualEditSelectAllHistory.addEventListener('change', () => {
+    const pageIds = manualEditCurrentHistoryItems.map((item) => item.jobId).filter(Boolean);
+    if (manualEditSelectAllHistory.checked) {
+      pageIds.forEach((jobId) => manualEditSelectedIds.add(jobId));
+    } else {
+      pageIds.forEach((jobId) => manualEditSelectedIds.delete(jobId));
+    }
+    manualEditHistoryBody.querySelectorAll('.manual-edit-history-check, .history-check').forEach((checkbox) => {
+      checkbox.checked = manualEditSelectAllHistory.checked;
+    });
+    updateManualEditHistorySelection();
+  });
+
+  manualEditDeleteSelectedButton.addEventListener('click', () => deleteManualEditJobs(Array.from(manualEditSelectedIds)));
+
   manualEditForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!manualEditFile) {
-      manualEditSetProgress(100, 'Bạn chưa chọn video để chỉnh sửa.', 'error');
-      return;
-    }
-    const data = new FormData();
-    data.append('video', manualEditFile);
     manualEditOpenButton.disabled = true;
     manualEditClearButton.disabled = true;
-    manualEditSetProgress(1, 'Đang chuẩn bị upload video để chỉnh sửa...');
     try {
-      const result = await uploadManualEditVideo(data);
+      let result;
+      let title;
+      if (manualEditUsesNetworkSource()) {
+        const url = manualEditVideoUrl.value.trim();
+        if (!url) {
+          manualEditSetProgress(100, 'Bạn chưa nhập link video để chỉnh sửa.', 'error');
+          return;
+        }
+        manualEditSetProgress(1, 'Đang gửi link video cho server tải về...');
+        result = await uploadManualEditNetworkVideo({
+          videoUrl: url,
+          cookiesFilePath: manualEditCookiesFilePath.value.trim()
+        });
+        title = url;
+      } else {
+        if (!manualEditFile) {
+          manualEditSetProgress(100, 'Bạn chưa chọn video để chỉnh sửa.', 'error');
+          return;
+        }
+        const data = new FormData();
+        data.append('video', manualEditFile);
+        manualEditSetProgress(1, 'Đang chuẩn bị upload video để chỉnh sửa...');
+        result = await uploadManualEditVideo(data);
+        title = manualEditFile.name;
+      }
       manualEditSetProgress(100, result.message || 'Đã tải video lên. Đang mở trình chỉnh sửa...', 'ok');
-      await loadHistory(1);
-      openEditor(`/api/highlights/${encodeURIComponent(result.jobId)}/edit`, result.previewUrl, manualEditFile.name, 'highlight');
+      await loadManualEditHistory(1);
+      openEditor(`/api/highlights/${encodeURIComponent(result.jobId)}/edit`, result.previewUrl, title, 'manual');
     } catch (error) {
       manualEditSetProgress(100, error.message, 'error');
     } finally {
-      manualEditOpenButton.disabled = !manualEditFile;
-      manualEditClearButton.disabled = !manualEditFile;
+      manualEditOpenButton.disabled = manualEditUsesNetworkSource() ? false : !manualEditFile;
+      manualEditClearButton.disabled = manualEditUsesNetworkSource() || !manualEditFile;
     }
   });
+}
+
+function initFacebookBatchFormEvents() {
+  if (!facebookBatchForm) {
+    return;
+  }
+  facebookBatchForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const url = facebookBatchUrl.value.trim();
+    if (!url) {
+      facebookBatchSetProgress(100, 'Bạn chưa nhập link danh sách reels Facebook.', 'error');
+      return;
+    }
+    const rawStart = Number(facebookBatchStart.value || 1);
+    const rawEnd = Number(facebookBatchEnd.value || rawStart || 1);
+    const start = Math.max(1, Number.isFinite(rawStart) ? rawStart : 1);
+    const end = Math.max(start, Number.isFinite(rawEnd) ? rawEnd : start);
+    if (end - start + 1 > 50) {
+      facebookBatchSetProgress(100, 'Mỗi lần chỉ tải tối đa 50 video. Hãy chia nhỏ khoảng tải.', 'error');
+      return;
+    }
+    const payload = {
+      reelsUrl: url,
+      startIndex: start,
+      endIndex: end,
+      cookiesFilePath: facebookBatchCookiesFilePath.value.trim()
+    };
+    facebookBatchDownloadButton.disabled = true;
+    facebookBatchSetProgress(1, `Đang gửi job tải Facebook ${start}-${end} cho server...`);
+    try {
+      const job = await uploadFacebookBatchJob(payload);
+      facebookBatchSetProgress(job.progress || 3, job.phase || 'Đã nhận job tải Facebook.');
+      clearInterval(facebookBatchPollTimer);
+      facebookBatchPollTimer = setInterval(() => pollFacebookBatchJob(job.jobId), 1200);
+      pollFacebookBatchJob(job.jobId);
+      await loadFacebookBatchHistory(1);
+    } catch (error) {
+      facebookBatchSetProgress(100, error.message, 'error');
+      facebookBatchDownloadButton.disabled = false;
+    }
+  });
+
+  facebookBatchRefreshButton.addEventListener('click', () => loadFacebookBatchHistory(facebookBatchCurrentPage));
+
+  facebookBatchSelectAllHistory.addEventListener('change', () => {
+    const pageIds = facebookBatchCurrentHistoryItems.map((item) => item.jobId).filter(Boolean);
+    if (facebookBatchSelectAllHistory.checked) {
+      pageIds.forEach((jobId) => facebookBatchSelectedIds.add(jobId));
+    } else {
+      pageIds.forEach((jobId) => facebookBatchSelectedIds.delete(jobId));
+    }
+    facebookBatchHistoryBody.querySelectorAll('.facebook-batch-history-check').forEach((checkbox) => {
+      checkbox.checked = facebookBatchSelectAllHistory.checked;
+    });
+    updateFacebookBatchSelection();
+  });
+
+  facebookBatchDeleteSelectedButton.addEventListener('click', () => deleteFacebookBatchJobs(Array.from(facebookBatchSelectedIds)));
 }
 
 function initFormEvents() {
@@ -3199,12 +3657,15 @@ async function submitVideoEdit() {
       throw new Error(result.error || 'Không xuất được video đã chỉnh sửa.');
     }
     setEditorRenderProgress(96, 'Render xong, đang cập nhật danh sách...');
-    const progressSetter = currentEditor.kind === 'split' ? splitSetProgress : setProgress;
+    const progressSetter = currentEditor.kind === 'split' ? splitSetProgress : (currentEditor.kind === 'manual' ? manualEditSetProgress : setProgress);
     progressSetter(100, result.message || 'Đã xuất video đã chỉnh sửa.', 'ok');
     setEditorStatus(result.message || 'Đã xuất video đã chỉnh sửa.', 'ok');
-    await loadHistory(1);
     if (currentEditor.kind === 'split') {
       await loadSplitHistory(splitCurrentPage);
+    } else if (currentEditor.kind === 'manual') {
+      await loadManualEditHistory(1);
+    } else {
+      await loadHistory(1);
     }
     setEditorRenderProgress(100, result.message || 'Đã xuất video đã chỉnh sửa.', 'Hoàn tất');
     await delay(350);
@@ -3501,10 +3962,13 @@ updateSourcePanels();
 initUploadEvents();
 initSplitUploadEvents();
 initManualEditUploadEvents();
+initFacebookBatchFormEvents();
 initFormEvents();
 initSplitFormEvents();
 initEditorEvents();
 initPreviewEvents();
 loadHealth();
 loadHistory(1);
+loadManualEditHistory(1);
+loadFacebookBatchHistory(1);
 loadSplitHistory(1);

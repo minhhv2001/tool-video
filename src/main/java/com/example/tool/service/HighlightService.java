@@ -57,6 +57,10 @@ public class HighlightService {
 	private static final int MAX_AUDIO_PROBES_PER_SOURCE = 48;
 	private static final int HISTORY_DELETE_THRESHOLD = 20;
 	private static final int HISTORY_DELETE_OLDEST_COUNT = 10;
+	private static final String CATEGORY_HIGHLIGHT = "highlight";
+	private static final String CATEGORY_MANUAL_EDIT = "manual-edit";
+	private static final String CATEGORY_MANUAL_EDIT_DRAFT = "manual-edit-draft";
+	private static final String CATEGORY_FACEBOOK_BATCH = "facebook-batch";
 	private static final List<String> VIDEO_EXTENSIONS = List.of(".mp4", ".mkv", ".webm", ".mov", ".m4v");
 
 	private final MediaWorkspace workspace;
@@ -258,12 +262,70 @@ public class HighlightService {
 		workspace.ensureBaseDirectories();
 		int safePage = Math.max(1, page);
 		int safeSize = Math.max(1, Math.min(50, size));
-		List<HighlightHistoryItem> items = readHistoryItems();
+		List<HighlightHistoryItem> items = readHistoryItems().stream()
+				.filter(this::isHighlightHistory)
+				.collect(Collectors.toList());
 		items.sort(Comparator.comparing(HighlightHistoryItem::getCreatedAt, Comparator.nullsLast(String::compareTo)).reversed());
 		int totalPages = (int) Math.ceil(items.size() / (double) safeSize);
 		int from = Math.min(items.size(), (safePage - 1) * safeSize);
 		int to = Math.min(items.size(), from + safeSize);
 		return new HighlightHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
+	}
+
+	public HighlightHistoryPage manualEditHistory(int page, int size) {
+		workspace.ensureBaseDirectories();
+		int safePage = Math.max(1, page);
+		int safeSize = Math.max(1, Math.min(50, size));
+		List<HighlightHistoryItem> items = readHistoryItems().stream()
+				.filter(this::isManualEditHistory)
+				.collect(Collectors.toList());
+		items.sort(Comparator.comparing(HighlightHistoryItem::getCreatedAt, Comparator.nullsLast(String::compareTo)).reversed());
+		int totalPages = (int) Math.ceil(items.size() / (double) safeSize);
+		int from = Math.min(items.size(), (safePage - 1) * safeSize);
+		int to = Math.min(items.size(), from + safeSize);
+		return new HighlightHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
+	}
+
+	public HighlightHistoryPage facebookBatchHistory(int page, int size) {
+		workspace.ensureBaseDirectories();
+		int safePage = Math.max(1, page);
+		int safeSize = Math.max(1, Math.min(50, size));
+		List<HighlightHistoryItem> items = readHistoryItems().stream()
+				.filter(this::isFacebookBatchHistory)
+				.collect(Collectors.toList());
+		items.sort(Comparator.comparing(HighlightHistoryItem::getCreatedAt, Comparator.nullsLast(String::compareTo)).reversed());
+		int totalPages = (int) Math.ceil(items.size() / (double) safeSize);
+		int from = Math.min(items.size(), (safePage - 1) * safeSize);
+		int to = Math.min(items.size(), from + safeSize);
+		return new HighlightHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
+	}
+
+	public HighlightJobStatus createFacebookBatchDownload(String reelsUrl, Integer requestedStartIndex, Integer requestedEndIndex, String cookiesFilePath) {
+		List<String> urls = normalizeBatchUrls(reelsUrl);
+		if (urls.isEmpty()) {
+			throw new IllegalArgumentException("Hãy nhập link danh sách video reels Facebook.");
+		}
+		workspace.ensureBaseDirectories();
+		String jobId = newJobId();
+		Path jobDirectory = jobDirectory(jobId);
+		Path uploadDirectory = jobDirectory.resolve("upload");
+		int startIndex = Math.max(1, requestedStartIndex == null ? 1 : requestedStartIndex);
+		int endIndex = Math.max(startIndex, requestedEndIndex == null ? startIndex + 9 : requestedEndIndex);
+		if (endIndex - startIndex + 1 > 50) {
+			throw new IllegalArgumentException("Mỗi lần chỉ nên tải tối đa 50 video để tránh treo máy. Hãy chia nhỏ khoảng tải.");
+		}
+		String sourceUrl = urls.get(0);
+		String note = "Facebook reels: " + sourceUrl + (urls.size() > 1 ? " và " + (urls.size() - 1) + " link khác" : "") + " | khoảng " + startIndex + "-" + endIndex;
+		HighlightJobStatus status = new HighlightJobStatus(jobId, sourceUrl);
+		status.setInputFileNames(urls);
+		status.setCutNote(note);
+		statuses.put(jobId, status);
+		progress(status, 2, "Đã nhận link danh sách reels. Đang chuẩn bị tải hàng loạt.");
+		HighlightHistoryItem item = toHistory(status, "processing", 0, 0, null, null);
+		item.setCategory(CATEGORY_FACEBOOK_BATCH);
+		saveManifest(jobDirectory, item);
+		CompletableFuture.runAsync(() -> processFacebookBatchDownload(status, urls, uploadDirectory, startIndex, endIndex, sanitizeNote(cookiesFilePath)), executorService);
+		return status;
 	}
 
 	public SplitClipHistoryPage splitHistory(int page, int size) {
@@ -291,17 +353,64 @@ public class HighlightService {
 		String jobId = newJobId();
 		Path jobDirectory = jobDirectory(jobId);
 		Path uploadDirectory = jobDirectory.resolve("upload");
-		Path workDirectory = jobDirectory.resolve("work");
-		Path outputDirectory = jobDirectory.resolve("output");
 		String originalName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank() ? "video-upload.mp4" : file.getOriginalFilename();
 		Path uploadedVideo = uploadDirectory.resolve("01-" + safeFileName(originalName)).normalize();
-		Path output = outputDirectory.resolve("highlight.mp4");
 		try {
 			Files.createDirectories(uploadDirectory);
+			file.transferTo(uploadedVideo);
+			return createEditableVideoRecord(jobId, uploadedVideo, originalName, "Video upload để chỉnh sửa thủ công.");
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không thể lưu video để chỉnh sửa.", ex);
+		}
+		catch (RuntimeException ex) {
+			writeError(jobDirectory, ex);
+			HighlightHistoryItem item = toHistory(new HighlightJobStatus(jobId, originalName), "error", 0, 0, null, ex.getMessage());
+			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT);
+			saveManifest(jobDirectory, item);
+			throw ex;
+		}
+	}
+
+	public VideoEditResult createEditableVideoFromUrls(List<String> urls, String cookiesFilePath) {
+		List<String> videoUrls = normalizeUrls(urls);
+		if (videoUrls.isEmpty()) {
+			throw new IllegalArgumentException("Hãy nhập ít nhất 1 link video.");
+		}
+		if (!ffmpegService.ffmpegAvailable() || !ffmpegService.ffprobeAvailable()) {
+			throw new IllegalStateException("Máy chưa có ffmpeg/ffprobe. Cài ffmpeg hoặc cấu hình đường dẫn ffmpeg trước khi render.");
+		}
+		workspace.ensureBaseDirectories();
+		String jobId = newJobId();
+		Path jobDirectory = jobDirectory(jobId);
+		Path uploadDirectory = jobDirectory.resolve("upload");
+		try {
+			Files.createDirectories(uploadDirectory);
+			Path downloaded = networkVideoDownloadService.downloadBestUpTo2k(videoUrls.get(0), uploadDirectory, 1, sanitizeNote(cookiesFilePath));
+			return createEditableVideoRecord(jobId, downloaded, videoUrls.get(0), "Video tải từ link để chỉnh sửa thủ công.");
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không thể chuẩn bị thư mục tải video từ link.", ex);
+		}
+		catch (RuntimeException ex) {
+			writeError(jobDirectory, ex);
+			HighlightJobStatus status = new HighlightJobStatus(jobId, videoUrls.get(0));
+			HighlightHistoryItem item = toHistory(status, "error", 0, 0, null, ex.getMessage());
+			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT);
+			saveManifest(jobDirectory, item);
+			throw ex;
+		}
+	}
+
+	private VideoEditResult createEditableVideoRecord(String jobId, Path source, String title, String note) {
+		Path jobDirectory = jobDirectory(jobId);
+		Path workDirectory = jobDirectory.resolve("work");
+		Path outputDirectory = jobDirectory.resolve("output");
+		Path output = outputDirectory.resolve("highlight.mp4");
+		try {
 			Files.createDirectories(workDirectory);
 			Files.createDirectories(outputDirectory);
-			file.transferTo(uploadedVideo);
-			ffmpegService.remuxToMp4(uploadedVideo, output);
+			ffmpegService.remuxToMp4(source, output);
 			double duration = ffmpegService.probeDuration(output);
 			String now = Instant.now().toString();
 			HighlightHistoryItem item = new HighlightHistoryItem(
@@ -309,24 +418,20 @@ public class HighlightService {
 					"ready",
 					now,
 					now,
-					List.of(originalName),
-					"Video upload để chỉnh sửa thủ công.",
+					List.of(title),
+					note,
 					duration,
 					1,
 					"/api/highlights/" + jobId + "/download",
 					null);
+			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT);
 			saveManifest(jobDirectory, item);
 			enforceHistoryLimit(jobId);
-			LOGGER.info("[{}] Đã tạo job chỉnh sửa thủ công từ video upload: {}", jobId, uploadedVideo);
+			LOGGER.info("[{}] Đã tạo job chỉnh sửa thủ công từ {}", jobId, source);
 			return new VideoEditResult(jobId, item.getDownloadUrl(), "/api/highlights/" + jobId + "/preview", "Đã tải video lên. Có thể chỉnh sửa ngay.");
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException("Không thể lưu video để chỉnh sửa.", ex);
-		}
-		catch (RuntimeException ex) {
-			writeError(jobDirectory, ex);
-			saveManifest(jobDirectory, toHistory(new HighlightJobStatus(jobId, originalName), "error", 0, 0, null, ex.getMessage()));
-			throw ex;
 		}
 	}
 
@@ -401,6 +506,48 @@ public class HighlightService {
 		return new HighlightDeleteResult(deleted.size(), deleted, skipped);
 	}
 
+	public HighlightDeleteResult deleteManualEditVideos(List<String> jobIds) {
+		workspace.ensureBaseDirectories();
+		List<String> requestedIds = jobIds == null ? List.of() : jobIds.stream()
+				.filter(id -> id != null && !id.isBlank())
+				.distinct()
+				.collect(Collectors.toList());
+		List<String> deleted = new ArrayList<>();
+		List<String> skipped = new ArrayList<>();
+		for (String jobId : requestedIds) {
+			Path manifest = jobDirectory(jobId).resolve("manifest.json");
+			HighlightHistoryItem item = Files.isRegularFile(manifest) ? readManifest(manifest) : null;
+			if (isManualEditHistory(item) && deleteJobDirectory(jobId, "người dùng xóa lịch sử edit video")) {
+				deleted.add(jobId);
+			}
+			else {
+				skipped.add(jobId);
+			}
+		}
+		return new HighlightDeleteResult(deleted.size(), deleted, skipped);
+	}
+
+	public HighlightDeleteResult deleteFacebookBatchVideos(List<String> jobIds) {
+		workspace.ensureBaseDirectories();
+		List<String> requestedIds = jobIds == null ? List.of() : jobIds.stream()
+				.filter(id -> id != null && !id.isBlank())
+				.distinct()
+				.collect(Collectors.toList());
+		List<String> deleted = new ArrayList<>();
+		List<String> skipped = new ArrayList<>();
+		for (String jobId : requestedIds) {
+			Path manifest = jobDirectory(jobId).resolve("manifest.json");
+			HighlightHistoryItem item = Files.isRegularFile(manifest) ? readManifest(manifest) : null;
+			if (isFacebookBatchHistory(item) && deleteJobDirectory(jobId, "người dùng xóa batch Facebook")) {
+				deleted.add(jobId);
+			}
+			else {
+				skipped.add(jobId);
+			}
+		}
+		return new HighlightDeleteResult(deleted.size(), deleted, skipped);
+	}
+
 	public SplitClipDeleteResult deleteSplitClips(List<SplitClipDeleteRequest.ClipRef> clips) {
 		workspace.ensureBaseDirectories();
 		List<SplitClipDeleteRequest.ClipRef> requestedClips = clips == null ? List.of() : clips.stream()
@@ -461,6 +608,61 @@ public class HighlightService {
 					"Đã lưu đè clip đã chỉnh sửa.");
 		}
 		return createEditedSplitClipRecord(source, safeOptions, musicFile, textOverlayFile, textLayerOverlayFiles, sourceTitle);
+	}
+
+	private void processFacebookBatchDownload(HighlightJobStatus status, List<String> reelsUrls, Path uploadDirectory, int startIndex, int endIndex, String cookiesFilePath) {
+		Path jobDirectory = jobDirectory(status.getJobId());
+		try {
+			Files.createDirectories(uploadDirectory);
+			progress(status, 8, "Đang tải Facebook reels " + startIndex + "-" + endIndex + " với chất lượng tốt nhất tối đa 2K.");
+			List<Path> downloadedVideos = downloadFacebookBatchSources(reelsUrls, uploadDirectory, startIndex, endIndex, cookiesFilePath);
+			List<String> names = downloadedVideos.stream()
+					.map(path -> path.getFileName().toString())
+					.collect(Collectors.toList());
+			double totalDuration = 0;
+			for (Path video : downloadedVideos) {
+				try {
+					totalDuration += Math.max(0, ffmpegService.probeDuration(video));
+				}
+				catch (RuntimeException ex) {
+					LOGGER.warn("[{}] Không đọc được thời lượng video đã tải, vẫn giữ file: {}", status.getJobId(), video);
+				}
+			}
+			status.setInputFileNames(names);
+			status.ready(totalDuration, totalDuration, downloadedVideos.size(), null, List.of(), List.of());
+			HighlightHistoryItem item = toHistory(status, "ready", totalDuration, downloadedVideos.size(), null, null);
+			item.setCategory(CATEGORY_FACEBOOK_BATCH);
+			item.setCutNote("Nguồn: " + reelsUrls.get(0) + (reelsUrls.size() > 1 ? " và " + (reelsUrls.size() - 1) + " link khác" : "") + " | khoảng " + startIndex + "-" + endIndex);
+			saveManifest(jobDirectory, item);
+			progress(status, 100, "Đã tải xong " + downloadedVideos.size() + " video Facebook.");
+			enforceHistoryLimit(status.getJobId());
+		}
+		catch (IOException | RuntimeException ex) {
+			LOGGER.error("[{}] Không thể tải hàng loạt Facebook.", status.getJobId(), ex);
+			status.failed(ex.getMessage() == null ? "Không thể tải hàng loạt Facebook." : ex.getMessage());
+			writeError(jobDirectory, ex instanceof Exception ? (Exception) ex : new RuntimeException(ex));
+			HighlightHistoryItem item = toHistory(status, "error", 0, 0, null, status.getError());
+			item.setCategory(CATEGORY_FACEBOOK_BATCH);
+			saveManifest(jobDirectory, item);
+			enforceHistoryLimit(status.getJobId());
+		}
+	}
+
+	private List<Path> downloadFacebookBatchSources(List<String> reelsUrls, Path uploadDirectory, int startIndex, int endIndex, String cookiesFilePath) {
+		if (reelsUrls.size() == 1) {
+			return networkVideoDownloadService.downloadPlaylistBestUpTo2k(reelsUrls.get(0), uploadDirectory, startIndex, endIndex, cookiesFilePath);
+		}
+		int from = Math.max(0, startIndex - 1);
+		int to = Math.min(reelsUrls.size(), endIndex);
+		if (from >= reelsUrls.size() || from >= to) {
+			throw new IllegalStateException("Danh sách bạn dán chỉ có " + reelsUrls.size() + " link, không đủ tới khoảng " + startIndex + "-" + endIndex + ".");
+		}
+		List<String> selectedUrls = reelsUrls.subList(from, to);
+		List<Path> downloaded = new ArrayList<>();
+		for (int i = 0; i < selectedUrls.size(); i++) {
+			downloaded.add(networkVideoDownloadService.downloadBestUpTo2k(selectedUrls.get(i), uploadDirectory, i + 1, cookiesFilePath));
+		}
+		return downloaded;
 	}
 
 	private void processNetworkHighlight(HighlightJobStatus status, List<String> videoUrls, Path uploadsDirectory, Path workDirectory,
@@ -1178,6 +1380,8 @@ public class HighlightService {
 	}
 
 	private VideoEditResult createEditedHighlightRecord(Path source, VideoEditOptions options, MultipartFile musicFile, MultipartFile textOverlayFile, List<MultipartFile> textLayerOverlayFiles, String sourceTitle) {
+		String sourceCategory = categoryForSource(source);
+		String sourceDraftJobId = manualEditDraftJobIdForSource(source);
 		String jobId = newJobId();
 		Path jobDirectory = workspace.jobsDirectory().resolve(jobId).normalize();
 		Path uploadDirectory = jobDirectory.resolve("upload");
@@ -1205,7 +1409,11 @@ public class HighlightService {
 					1,
 					"/api/highlights/" + jobId + "/download",
 					null);
+			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT.equalsIgnoreCase(sourceCategory) ? CATEGORY_MANUAL_EDIT : sourceCategory);
 			saveManifest(jobDirectory, item);
+			if (sourceDraftJobId != null && !sourceDraftJobId.equals(jobId)) {
+				deleteJobDirectory(sourceDraftJobId, "đã tạo bản chỉnh sửa mới nên xóa job upload nháp");
+			}
 			enforceHistoryLimit(jobId);
 			LOGGER.info("[{}] Đã tạo bản ghi video chỉnh sửa mới từ {}", jobId, source);
 			return new VideoEditResult(jobId, item.getDownloadUrl(), "/api/highlights/" + jobId + "/preview", "Đã tạo bản ghi video chỉnh sửa mới.");
@@ -1527,6 +1735,12 @@ public class HighlightService {
 		item.setClipsUsed(1);
 		item.setDownloadUrl("/api/highlights/" + jobId + "/download");
 		item.setError(null);
+		if (CATEGORY_MANUAL_EDIT_DRAFT.equalsIgnoreCase(item.getCategory())) {
+			item.setCategory(CATEGORY_MANUAL_EDIT);
+		}
+		else if (item.getCategory() == null || item.getCategory().isBlank()) {
+			item.setCategory(CATEGORY_HIGHLIGHT);
+		}
 		saveManifest(jobDirectory, item);
 	}
 
@@ -1658,6 +1872,67 @@ public class HighlightService {
 	private boolean isVideoFile(Path path) {
 		String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
 		return VIDEO_EXTENSIONS.stream().anyMatch(name::endsWith);
+	}
+
+	private boolean isManualEditHistory(HighlightHistoryItem item) {
+		return item != null
+				&& CATEGORY_MANUAL_EDIT.equalsIgnoreCase(item.getCategory())
+				&& !isManualEditDraftNote(item);
+	}
+
+	private boolean isFacebookBatchHistory(HighlightHistoryItem item) {
+		return item != null && CATEGORY_FACEBOOK_BATCH.equalsIgnoreCase(item.getCategory());
+	}
+
+	private boolean isHighlightHistory(HighlightHistoryItem item) {
+		return item != null
+				&& !CATEGORY_MANUAL_EDIT.equalsIgnoreCase(item.getCategory())
+				&& !CATEGORY_MANUAL_EDIT_DRAFT.equalsIgnoreCase(item.getCategory())
+				&& !CATEGORY_FACEBOOK_BATCH.equalsIgnoreCase(item.getCategory());
+	}
+
+	private boolean isManualEditDraftNote(HighlightHistoryItem item) {
+		String note = item.getCutNote() == null ? "" : item.getCutNote().trim();
+		return "Video upload để chỉnh sửa thủ công.".equals(note)
+				|| "Video tải từ link để chỉnh sửa thủ công.".equals(note);
+	}
+
+	private String categoryForSource(Path source) {
+		if (source == null) {
+			return CATEGORY_HIGHLIGHT;
+		}
+		Path current = source.toAbsolutePath().normalize();
+		while (current != null) {
+			Path manifest = current.resolve("manifest.json");
+			if (Files.isRegularFile(manifest)) {
+				HighlightHistoryItem item = readManifest(manifest);
+				if (item != null && item.getCategory() != null && !item.getCategory().isBlank()) {
+					return item.getCategory();
+				}
+			}
+			current = current.getParent();
+		}
+		return CATEGORY_HIGHLIGHT;
+	}
+
+	private String manualEditDraftJobIdForSource(Path source) {
+		if (source == null) {
+			return null;
+		}
+		Path current = source.toAbsolutePath().normalize();
+		while (current != null) {
+			Path manifest = current.resolve("manifest.json");
+			if (Files.isRegularFile(manifest)) {
+				HighlightHistoryItem item = readManifest(manifest);
+				if (item != null && CATEGORY_MANUAL_EDIT_DRAFT.equalsIgnoreCase(item.getCategory())) {
+					return item.getJobId() == null || item.getJobId().isBlank()
+							? current.getFileName().toString()
+							: item.getJobId();
+				}
+			}
+			current = current.getParent();
+		}
+		return null;
 	}
 
 	private List<HighlightHistoryItem> readHistoryItems() {
@@ -1881,6 +2156,17 @@ public class HighlightService {
 			return List.of();
 		}
 		return urls.stream()
+				.filter(url -> url != null && !url.isBlank())
+				.map(String::trim)
+				.distinct()
+				.collect(Collectors.toList());
+	}
+
+	private List<String> normalizeBatchUrls(String value) {
+		if (value == null || value.isBlank()) {
+			return List.of();
+		}
+		return List.of(value.split("[\\s,;]+")).stream()
 				.filter(url -> url != null && !url.isBlank())
 				.map(String::trim)
 				.distinct()

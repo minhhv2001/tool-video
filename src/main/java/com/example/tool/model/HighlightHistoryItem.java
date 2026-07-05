@@ -15,6 +15,7 @@ public class HighlightHistoryItem {
 	private int clipsUsed;
 	private String downloadUrl;
 	private String error;
+	private String category;
 
 	public HighlightHistoryItem() {
 	}
@@ -111,5 +112,13 @@ public class HighlightHistoryItem {
 
 	public void setError(String error) {
 		this.error = error;
+	}
+
+	public String getCategory() {
+		return category;
+	}
+
+	public void setCategory(String category) {
+		this.category = category;
 	}
 }

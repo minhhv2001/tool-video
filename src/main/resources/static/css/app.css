@@ -168,6 +168,14 @@ p {
   grid-template-columns: minmax(340px, 520px) minmax(0, 1fr);
 }
 
+.facebook-batch-layout {
+  grid-template-columns: minmax(320px, 460px) minmax(0, 1fr);
+}
+
+.batch-range-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .panel {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -786,6 +794,18 @@ tr:last-child td { border-bottom: 0; }
 .split-table .action-cell {
   width: 12%;
   min-width: 0;
+}
+
+.facebook-batch-table .action-cell {
+  width: 12%;
+}
+
+.facebook-batch-table .file-cell {
+  width: 24%;
+}
+
+.facebook-batch-table .note-cell {
+  width: 22%;
 }
 
 .row-actions .download,

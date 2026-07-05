@@ -25,7 +25,7 @@
                 <span class="hint">Server sẽ tải bản nét nhất có thể, giới hạn tối đa 2K rồi dùng video đó để tách clip.</span>
               </label>
               <label class="note-control">Cookies.txt nếu link cần đăng nhập
-                <input id="splitCookiesFilePath" name="cookiesFilePath" type="text" placeholder="Ví dụ: C:\\Users\\minhm\\Downloads\\instagram-cookies.txt">
+                <input id="splitCookiesFilePath" name="cookiesFilePath" type="text" placeholder="Ví dụ: %USERPROFILE%\\Downloads\\instagram-cookies.txt">
                 <span class="hint">Dùng khi Instagram báo lỗi cookie/DPAPI. Có thể để trống nếu link tải công khai.</span>
               </label>
             </div>
