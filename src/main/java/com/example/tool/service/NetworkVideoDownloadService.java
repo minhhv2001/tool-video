@@ -12,9 +12,11 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -262,7 +264,10 @@ public class NetworkVideoDownloadService {
 
 	private List<Path> downloadFacebookReelsPageByScraping(String url, Path outputDirectory, int startIndex, int endIndex, String cookiesFilePath)
 			throws IOException, InterruptedException {
-		List<String> reelUrls = extractFacebookReelUrls(url, cookiesFilePath);
+		List<String> reelUrls = extractFacebookReelUrlsWithCookies(url, cookiesFilePath);
+		if (reelUrls.isEmpty()) {
+			throw new IllegalStateException("Facebook không trả danh sách reel cho server từ link /reels/ này. Hãy dán nhiều link reel cụ thể, hoặc copy HTML vùng danh sách reels có href=\"/reel/...\" rồi dán vào ô link batch.");
+		}
 		if (reelUrls.isEmpty()) {
 			throw new IllegalStateException("Không tìm thấy link reel con trong trang Facebook này. Nếu trang cần đăng nhập, hãy dùng cookies.txt hoặc dán từng link reel cụ thể.");
 		}
@@ -278,6 +283,42 @@ public class NetworkVideoDownloadService {
 			downloaded.add(downloadBestUpTo2k(selectedUrls.get(i), outputDirectory, i + 1, cookiesFilePath));
 		}
 		return downloaded;
+	}
+
+	private List<String> extractFacebookReelUrlsWithCookies(String url, String cookiesFilePath) throws IOException, InterruptedException {
+		HttpClient client = HttpClient.newBuilder()
+				.connectTimeout(Duration.ofSeconds(20))
+				.followRedirects(HttpClient.Redirect.NORMAL)
+				.build();
+		String cookieHeader = facebookCookieHeader(cookiesFilePath);
+		int lastStatus = 0;
+		for (String candidate : facebookReelsCandidates(url)) {
+			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(candidate))
+					.timeout(Duration.ofSeconds(30))
+					.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+					.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+					.header("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7")
+					.header("Cache-Control", "no-cache")
+					.GET();
+			if (!cookieHeader.isBlank()) {
+				builder.header("Cookie", cookieHeader);
+			}
+			HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+			lastStatus = response.statusCode();
+			if (response.statusCode() >= 400) {
+				LOGGER.warn("Facebook trả HTTP {} khi đọc {}, thử URL khác.", response.statusCode(), candidate);
+				continue;
+			}
+			List<String> urls = parseFacebookReelUrls(response.body());
+			if (!urls.isEmpty()) {
+				LOGGER.info("Đọc trang Facebook reels thành công từ {}, tìm thấy {} reel.", candidate, urls.size());
+				return urls;
+			}
+		}
+		if (lastStatus >= 400) {
+			throw new IllegalStateException("Facebook trả lỗi HTTP " + lastStatus + " khi đọc trang reels. Hãy kiểm tra cookies.txt hoặc dán từng link reel cụ thể.");
+		}
+		return List.of();
 	}
 
 	private List<String> extractFacebookReelUrls(String url, String cookiesFilePath) throws IOException, InterruptedException {
@@ -318,6 +359,65 @@ public class NetworkVideoDownloadService {
 			path += "/";
 		}
 		return "https://mbasic.facebook.com" + path;
+	}
+
+	private List<String> facebookReelsCandidates(String url) {
+		URI uri = URI.create(url);
+		String path = uri.getPath() == null || uri.getPath().isBlank() ? "/reels/" : uri.getPath();
+		if (!path.endsWith("/")) {
+			path += "/";
+		}
+		return List.of(
+				"https://www.facebook.com" + path,
+				"https://m.facebook.com" + path,
+				"https://mbasic.facebook.com" + path);
+	}
+
+	private List<String> parseFacebookReelUrls(String body) {
+		String html = body == null ? "" : body
+				.replace("\\/", "/")
+				.replace("\\u002F", "/")
+				.replace("\\u0025", "%")
+				.replace("&amp;", "&")
+				.replace("\\\"", "\"");
+		Set<String> ids = new LinkedHashSet<>();
+		addMatches(ids, html, Pattern.compile("facebook\\.com/(?:[^\"'<>\\s]+/)?reel/(\\d+)", Pattern.CASE_INSENSITIVE));
+		addMatches(ids, html, Pattern.compile("/(?:[^\"'<>\\s]+/)?reel/(\\d+)", Pattern.CASE_INSENSITIVE));
+		addMatches(ids, html, Pattern.compile("\"reel_id\"\\s*:\\s*\"?(\\d+)\"?", Pattern.CASE_INSENSITIVE));
+		addMatches(ids, html, Pattern.compile("\"video_id\"\\s*:\\s*\"?(\\d+)\"?", Pattern.CASE_INSENSITIVE));
+		return ids.stream()
+				.map(id -> "https://www.facebook.com/reel/" + id + "/")
+				.collect(Collectors.toList());
+	}
+
+	private String facebookCookieHeader(String cookiesFilePath) {
+		Path cookiesFile = resolveCookiesFile(cookiesFilePath);
+		if (cookiesFile == null) {
+			return "";
+		}
+		try {
+			Map<String, String> cookies = new LinkedHashMap<>();
+			for (String line : Files.readAllLines(cookiesFile, StandardCharsets.UTF_8)) {
+				String trimmed = line.trim();
+				if (trimmed.isBlank() || (trimmed.startsWith("#") && !trimmed.startsWith("#HttpOnly_"))) {
+					continue;
+				}
+				if (trimmed.startsWith("#HttpOnly_")) {
+					trimmed = trimmed.substring("#HttpOnly_".length());
+				}
+				String[] parts = trimmed.split("\\t");
+				if (parts.length >= 7 && parts[0].contains("facebook.com")) {
+					cookies.put(parts[5], parts[6]);
+				}
+			}
+			LOGGER.info("Đã đọc {} cookie Facebook từ file cookies.txt.", cookies.size());
+			return cookies.entrySet().stream()
+					.map(entry -> entry.getKey() + "=" + entry.getValue())
+					.collect(Collectors.joining("; "));
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException("Không đọc được file cookies.txt Facebook: " + cookiesFile, ex);
+		}
 	}
 
 	private void addMatches(Set<String> ids, String html, Pattern pattern) {

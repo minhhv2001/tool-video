@@ -2166,11 +2166,41 @@ public class HighlightService {
 		if (value == null || value.isBlank()) {
 			return List.of();
 		}
-		return List.of(value.split("[\\s,;]+")).stream()
+		String decoded = value
+				.replace("\\/", "/")
+				.replace("\\u002F", "/")
+				.replace("&amp;", "&")
+				.replace("&quot;", "\"")
+				.replace("&#039;", "'");
+		LinkedHashSet<String> urls = new LinkedHashSet<>();
+		Matcher fullUrlMatcher = Pattern.compile("https?://(?:www\\.|m\\.|mbasic\\.)?facebook\\.com/[^\\s\"'<>]+", Pattern.CASE_INSENSITIVE)
+				.matcher(decoded);
+		while (fullUrlMatcher.find()) {
+			urls.add(cleanFacebookUrl(fullUrlMatcher.group()));
+		}
+		Matcher reelMatcher = Pattern.compile("(?:(?:href|src)=['\"])?/(?:[^\\s\"'<>]+/)?reel/(\\d+)", Pattern.CASE_INSENSITIVE)
+				.matcher(decoded);
+		while (reelMatcher.find()) {
+			urls.add("https://www.facebook.com/reel/" + reelMatcher.group(1) + "/");
+		}
+		if (!urls.isEmpty()) {
+			return new ArrayList<>(urls);
+		}
+		return List.of(decoded.split("[\\s,;]+")).stream()
 				.filter(url -> url != null && !url.isBlank())
-				.map(String::trim)
+				.map(this::cleanFacebookUrl)
 				.distinct()
 				.collect(Collectors.toList());
+	}
+
+	private String cleanFacebookUrl(String value) {
+		String url = value == null ? "" : value.trim();
+		url = url.replaceAll("[\"'<>]+$", "");
+		Matcher reel = Pattern.compile(".*/reel/(\\d+).*", Pattern.CASE_INSENSITIVE).matcher(url);
+		if (reel.matches()) {
+			return "https://www.facebook.com/reel/" + reel.group(1) + "/";
+		}
+		return url;
 	}
 
 	private static String normalizeSearchText(String value) {

@@ -7,7 +7,7 @@
           <form id="facebookBatchForm">
             <label class="note-control">Link danh sách video reels
               <textarea id="facebookBatchUrl" name="reelsUrl" placeholder="Ví dụ: https://www.facebook.com/tên-page/reels/&#10;Hoặc dán nhiều link reel, mỗi dòng một link"></textarea>
-              <span class="hint">Có thể dán link trang reels hoặc nhiều link reel cụ thể. Với Facebook, dán nhiều link reel cụ thể sẽ ổn định hơn.</span>
+              <span class="hint">Ổn định nhất là dán nhiều link /reel/id hoặc dán HTML vùng danh sách có href="/reel/...". Link page /reels/ chỉ thử tự bóc, Facebook có thể chặn.</span>
             </label>
 
             <div class="controls batch-range-controls">
