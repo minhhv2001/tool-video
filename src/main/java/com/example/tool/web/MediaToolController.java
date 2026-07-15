@@ -418,6 +418,9 @@ public class MediaToolController {
 	private String currentOwner() {
 		ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
 		HttpSession session = attributes == null ? null : attributes.getRequest().getSession(false);
+		if (AuthSession.admin(session)) {
+			return "*";
+		}
 		String username = AuthSession.username(session);
 		return username == null || username.isBlank() ? "local" : username;
 	}
