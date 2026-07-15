@@ -14,6 +14,7 @@ public class SplitClipHistoryItem {
 	private double durationSeconds;
 	private String downloadUrl;
 	private String error;
+	private String owner;
 
 	public SplitClipHistoryItem() {
 	}
@@ -129,5 +130,13 @@ public class SplitClipHistoryItem {
 
 	public void setError(String error) {
 		this.error = error;
+	}
+
+	public String getOwner() {
+		return owner;
+	}
+
+	public void setOwner(String owner) {
+		this.owner = owner;
 	}
 }

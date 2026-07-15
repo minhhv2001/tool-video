@@ -16,6 +16,7 @@ public class HighlightHistoryItem {
 	private String downloadUrl;
 	private String error;
 	private String category;
+	private String owner;
 
 	public HighlightHistoryItem() {
 	}
@@ -120,5 +121,13 @@ public class HighlightHistoryItem {
 
 	public void setCategory(String category) {
 		this.category = category;
+	}
+
+	public String getOwner() {
+		return owner;
+	}
+
+	public void setOwner(String owner) {
+		this.owner = owner;
 	}
 }

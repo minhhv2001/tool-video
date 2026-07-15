@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import javax.servlet.http.HttpSession;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
@@ -44,6 +45,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -113,26 +116,27 @@ public class MediaToolController {
 
 	@PostMapping(value = "/edit-videos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	public VideoEditResult createEditableVideo(@RequestParam("video") MultipartFile video) {
-		return highlightService.createEditableVideo(video);
+		return highlightService.createEditableVideo(video, currentOwner());
 	}
 
 	@PostMapping("/edit-videos/from-url")
 	public VideoEditResult createEditableVideoFromUrl(@RequestBody NetworkVideoRequest request) {
 		return highlightService.createEditableVideoFromUrls(
 				request.normalizedUrls(),
-				request.getCookiesFilePath());
+				request.getCookiesFilePath(),
+				currentOwner());
 	}
 
 	@GetMapping("/edit-videos")
 	public HighlightHistoryPage manualEditHistory(
 			@RequestParam(value = "page", defaultValue = "1") int page,
 			@RequestParam(value = "size", defaultValue = "10") int size) {
-		return highlightService.manualEditHistory(page, size);
+		return highlightService.manualEditHistory(page, size, currentOwner());
 	}
 
 	@PostMapping("/edit-videos/delete")
 	public HighlightDeleteResult deleteManualEditVideos(@RequestBody HighlightDeleteRequest request) {
-		return highlightService.deleteManualEditVideos(request.getJobIds());
+		return highlightService.deleteManualEditVideos(request.getJobIds(), currentOwner());
 	}
 
 	@PostMapping("/facebook-batches")
@@ -141,28 +145,30 @@ public class MediaToolController {
 				request.getReelsUrl(),
 				request.getStartIndex(),
 				request.getEndIndex(),
-				request.getCookiesFilePath());
+				request.getCookiesFilePath(),
+				currentOwner());
 	}
 
 	@GetMapping("/facebook-batches/{jobId}")
 	public HighlightJobStatus facebookBatchStatus(@PathVariable String jobId) {
-		return highlightService.status(jobId);
+		return highlightService.status(jobId, currentOwner());
 	}
 
 	@GetMapping("/facebook-batches")
 	public HighlightHistoryPage facebookBatchHistory(
 			@RequestParam(value = "page", defaultValue = "1") int page,
 			@RequestParam(value = "size", defaultValue = "10") int size) {
-		return highlightService.facebookBatchHistory(page, size);
+		return highlightService.facebookBatchHistory(page, size, currentOwner());
 	}
 
 	@PostMapping("/facebook-batches/delete")
 	public HighlightDeleteResult deleteFacebookBatches(@RequestBody HighlightDeleteRequest request) {
-		return highlightService.deleteFacebookBatchVideos(request.getJobIds());
+		return highlightService.deleteFacebookBatchVideos(request.getJobIds(), currentOwner());
 	}
 
 	@PostMapping("/facebook-batches/{jobId}/open-location")
 	public OpenLocationResult openFacebookBatchLocation(@PathVariable String jobId) {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		return openLocation(highlightService.sourceDirectory(jobId));
 	}
 
@@ -181,7 +187,7 @@ public class MediaToolController {
 		if (video != null && !video.isEmpty()) {
 			allVideos.add(video);
 		}
-		return highlightService.createHighlight(allVideos, clipCount, clipSeconds, cutNote, aspectRatio);
+		return highlightService.createHighlight(allVideos, clipCount, clipSeconds, cutNote, aspectRatio, currentOwner());
 	}
 
 	@PostMapping("/highlights/from-url")
@@ -192,7 +198,8 @@ public class MediaToolController {
 				request.getClipSeconds(),
 				request.getCutNote(),
 				request.getCookiesFilePath(),
-				request.getAspectRatio());
+				request.getAspectRatio(),
+				currentOwner());
 	}
 
 	@PostMapping(value = "/split-highlights", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -210,7 +217,7 @@ public class MediaToolController {
 		if (video != null && !video.isEmpty()) {
 			allVideos.add(video);
 		}
-		return highlightService.createSplitClips(allVideos, clipCount, clipSeconds, cutNote, aspectRatio);
+		return highlightService.createSplitClips(allVideos, clipCount, clipSeconds, cutNote, aspectRatio, currentOwner());
 	}
 
 	@PostMapping("/split-highlights/from-url")
@@ -221,29 +228,30 @@ public class MediaToolController {
 				request.getClipSeconds(),
 				request.getCutNote(),
 				request.getCookiesFilePath(),
-				request.getAspectRatio());
+				request.getAspectRatio(),
+				currentOwner());
 	}
 
 	@GetMapping("/split-highlights/{jobId}")
 	public HighlightJobStatus splitHighlightStatus(@PathVariable String jobId) {
-		return highlightService.status(jobId);
+		return highlightService.status(jobId, currentOwner());
 	}
 
 	@GetMapping("/split-highlights")
 	public SplitClipHistoryPage splitHighlightHistory(
 			@RequestParam(value = "page", defaultValue = "1") int page,
 			@RequestParam(value = "size", defaultValue = "10") int size) {
-		return highlightService.splitHistory(page, size);
+		return highlightService.splitHistory(page, size, currentOwner());
 	}
 
 	@DeleteMapping("/split-highlights/{jobId}/clips/{clipIndex}")
 	public SplitClipDeleteResult deleteSplitClip(@PathVariable String jobId, @PathVariable int clipIndex) {
-		return highlightService.deleteSplitClips(List.of(new SplitClipDeleteRequest.ClipRef(jobId, clipIndex)));
+		return highlightService.deleteSplitClips(List.of(new SplitClipDeleteRequest.ClipRef(jobId, clipIndex)), currentOwner());
 	}
 
 	@PostMapping("/split-highlights/delete")
 	public SplitClipDeleteResult deleteSplitClips(@RequestBody SplitClipDeleteRequest request) {
-		return highlightService.deleteSplitClips(request.getClips());
+		return highlightService.deleteSplitClips(request.getClips(), currentOwner());
 	}
 
 	@PostMapping(value = "/split-highlights/{jobId}/clips/{clipIndex}/edit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -274,6 +282,7 @@ public class MediaToolController {
 			@RequestParam(value = "music", required = false) MultipartFile music,
 			@RequestParam(value = "textOverlay", required = false) MultipartFile textOverlay,
 			@RequestParam(value = "textLayerOverlays", required = false) List<MultipartFile> textLayerOverlays) {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		return highlightService.editSplitClip(jobId, clipIndex, editOptions(sourceType, startSeconds, endSeconds, rotationDegrees, videoZoom,
 				outputWidth, outputHeight, overlayText, textXPercent, textYPercent, textSize, textColor, textFont, textBackground,
 				textPosition, audioMode, muteOriginalAudio, saveMode, title, segmentsJson, textLayersJson), music, textOverlay, textLayerOverlays);
@@ -281,6 +290,7 @@ public class MediaToolController {
 
 	@GetMapping("/split-highlights/{jobId}/clips/{clipIndex}/download")
 	public ResponseEntity<StreamingResponseBody> downloadSplitClip(@PathVariable String jobId, @PathVariable int clipIndex) throws IOException {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		Path file = highlightService.splitClipDownloadPath(jobId, clipIndex);
 		StreamingResponseBody body = outputStream -> {
 			Files.copy(file, outputStream);
@@ -295,6 +305,7 @@ public class MediaToolController {
 
 	@GetMapping("/split-highlights/{jobId}/clips/{clipIndex}/preview")
 	public ResponseEntity<Resource> previewSplitClip(@PathVariable String jobId, @PathVariable int clipIndex) throws IOException {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		Path file = highlightService.splitClipDownloadPath(jobId, clipIndex);
 		return inlineVideo(file, file.getFileName().toString());
 	}
@@ -304,6 +315,7 @@ public class MediaToolController {
 			@PathVariable String jobId,
 			@PathVariable int clipIndex,
 			@RequestParam(value = "target", defaultValue = "output") String target) {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		Path path = "source".equalsIgnoreCase(target)
 				? highlightService.sourceDirectory(jobId)
 				: highlightService.splitClipOutputPath(jobId, clipIndex);
@@ -312,24 +324,24 @@ public class MediaToolController {
 
 	@GetMapping("/highlights/{jobId}")
 	public HighlightJobStatus highlightStatus(@PathVariable String jobId) {
-		return highlightService.status(jobId);
+		return highlightService.status(jobId, currentOwner());
 	}
 
 	@GetMapping("/highlights")
 	public HighlightHistoryPage highlightHistory(
 			@RequestParam(value = "page", defaultValue = "1") int page,
 			@RequestParam(value = "size", defaultValue = "10") int size) {
-		return highlightService.history(page, size);
+		return highlightService.history(page, size, currentOwner());
 	}
 
 	@DeleteMapping("/highlights/{jobId}")
 	public HighlightDeleteResult deleteHighlight(@PathVariable String jobId) {
-		return highlightService.deleteHighlights(List.of(jobId));
+		return highlightService.deleteHighlights(List.of(jobId), currentOwner());
 	}
 
 	@PostMapping("/highlights/delete")
 	public HighlightDeleteResult deleteHighlights(@RequestBody HighlightDeleteRequest request) {
-		return highlightService.deleteHighlights(request.getJobIds());
+		return highlightService.deleteHighlights(request.getJobIds(), currentOwner());
 	}
 
 	@PostMapping(value = "/highlights/{jobId}/edit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -359,6 +371,7 @@ public class MediaToolController {
 			@RequestParam(value = "music", required = false) MultipartFile music,
 			@RequestParam(value = "textOverlay", required = false) MultipartFile textOverlay,
 			@RequestParam(value = "textLayerOverlays", required = false) List<MultipartFile> textLayerOverlays) {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		return highlightService.editHighlight(jobId, editOptions(sourceType, startSeconds, endSeconds, rotationDegrees, videoZoom,
 				outputWidth, outputHeight, overlayText, textXPercent, textYPercent, textSize, textColor, textFont, textBackground,
 				textPosition, audioMode, muteOriginalAudio, saveMode, title, segmentsJson, textLayersJson), music, textOverlay, textLayerOverlays);
@@ -366,6 +379,7 @@ public class MediaToolController {
 
 	@GetMapping("/highlights/{jobId}/download")
 	public ResponseEntity<StreamingResponseBody> downloadHighlight(@PathVariable String jobId) throws IOException {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		Path file = highlightService.downloadPath(jobId);
 		StreamingResponseBody body = outputStream -> {
 			try {
@@ -385,6 +399,7 @@ public class MediaToolController {
 
 	@GetMapping("/highlights/{jobId}/preview")
 	public ResponseEntity<Resource> previewHighlight(@PathVariable String jobId) throws IOException {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		Path file = highlightService.downloadPath(jobId);
 		return inlineVideo(file, "highlight.mp4");
 	}
@@ -393,12 +408,19 @@ public class MediaToolController {
 	public OpenLocationResult openHighlightLocation(
 			@PathVariable String jobId,
 			@RequestParam(value = "target", defaultValue = "output") String target) {
+		highlightService.assertJobOwner(jobId, currentOwner());
 		Path path = "source".equalsIgnoreCase(target)
 				? highlightService.sourceDirectory(jobId)
 				: highlightService.highlightOutputPath(jobId);
 		return openLocation(path);
 	}
 
+	private String currentOwner() {
+		ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+		HttpSession session = attributes == null ? null : attributes.getRequest().getSession(false);
+		String username = AuthSession.username(session);
+		return username == null || username.isBlank() ? "local" : username;
+	}
 	private OpenLocationResult openLocation(Path path) {
 		Path openedPath = localFileLocationService.open(path);
 		return new OpenLocationResult(

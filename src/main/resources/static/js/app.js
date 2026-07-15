@@ -10,6 +10,14 @@ const form = document.querySelector('#uploadForm');
 const processButton = document.querySelector('#processButton');
 const refreshButton = document.querySelector('#refreshButton');
 const health = document.querySelector('#health');
+const authGate = document.querySelector('#authGate');
+const loginForm = document.querySelector('#loginForm');
+const loginUsername = document.querySelector('#loginUsername');
+const loginPassword = document.querySelector('#loginPassword');
+const loginButton = document.querySelector('#loginButton');
+const loginError = document.querySelector('#loginError');
+const authUser = document.querySelector('#authUser');
+const logoutButton = document.querySelector('#logoutButton');
 const state = document.querySelector('#state');
 const ring = document.querySelector('#ring');
 const percent = document.querySelector('#percent');
@@ -457,6 +465,95 @@ function renderManualEditFile() {
   manualEditSetProgress(0, 'Đã chọn video. Bấm mở trình chỉnh sửa để bắt đầu.');
 }
 
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await nativeFetch(...args);
+  if (response.status === 401 && !String(args[0] || '').includes('/api/auth/')) {
+    showAuthGate();
+  }
+  return response;
+};
+
+function showAuthGate(message = '') {
+  if (!authGate) return;
+  authGate.hidden = false;
+  if (loginError) {
+    loginError.hidden = !message;
+    loginError.textContent = message;
+  }
+  setTimeout(() => loginUsername && loginUsername.focus(), 50);
+}
+
+function hideAuthGate(user) {
+  if (authGate) authGate.hidden = true;
+  if (authUser) {
+    authUser.hidden = false;
+    authUser.textContent = `Tài khoản: ${user?.displayName || user?.username || 'local'}`;
+  }
+  if (logoutButton) logoutButton.hidden = false;
+}
+
+async function initializeAuthGate() {
+  try {
+    const response = await nativeFetch('/api/auth/me', { credentials: 'same-origin' });
+    const user = await response.json();
+    if (user.authenticated) {
+      hideAuthGate(user);
+      return true;
+    }
+    showAuthGate();
+    return false;
+  } catch (error) {
+    showAuthGate('Không kết nối được server đăng nhập.');
+    return false;
+  }
+}
+
+function initAuthEvents() {
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (loginButton) loginButton.disabled = true;
+      if (loginError) loginError.hidden = true;
+      try {
+        const response = await nativeFetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: loginUsername.value.trim(), password: loginPassword.value })
+        });
+        if (!response.ok) {
+          showAuthGate('Sai tên đăng nhập hoặc mật khẩu.');
+          return;
+        }
+        const user = await response.json();
+        hideAuthGate(user);
+        loadAllHistories().catch((error) => console.warn('Khong tai duoc danh sach sau dang nhap.', error));
+      } catch (error) {
+        showAuthGate('Không đăng nhập được.');
+      } finally {
+        if (loginButton) loginButton.disabled = false;
+      }
+    });
+  }
+  if (logoutButton) {
+    logoutButton.addEventListener('click', async () => {
+      await nativeFetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+      if (authUser) authUser.hidden = true;
+      if (logoutButton) logoutButton.hidden = true;
+      showAuthGate();
+    });
+  }
+}
+
+async function loadAllHistories() {
+  await Promise.all([
+    loadHistory(1),
+    loadManualEditHistory(1),
+    loadFacebookBatchHistory(1),
+    loadSplitHistory(1)
+  ]);
+}
 async function loadHealth() {
   try {
     const response = await fetch('/api/health');
@@ -3959,6 +4056,7 @@ function escapeHtml(value) {
 
 initMenu();
 updateSourcePanels();
+initAuthEvents();
 initUploadEvents();
 initSplitUploadEvents();
 initManualEditUploadEvents();
@@ -3968,7 +4066,8 @@ initSplitFormEvents();
 initEditorEvents();
 initPreviewEvents();
 loadHealth();
-loadHistory(1);
-loadManualEditHistory(1);
-loadFacebookBatchHistory(1);
-loadSplitHistory(1);
+initializeAuthGate().then((authenticated) => {
+  if (authenticated) {
+    loadAllHistories();
+  }
+});

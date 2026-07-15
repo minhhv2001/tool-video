@@ -77,7 +77,7 @@ public class HighlightService {
 		this.objectMapper = objectMapper;
 	}
 
-	public HighlightJobStatus createHighlight(List<MultipartFile> files, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String aspectRatio) {
+	public HighlightJobStatus createHighlight(List<MultipartFile> files, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String aspectRatio, String owner) {
 		List<MultipartFile> videos = files == null ? List.of() : files.stream()
 				.filter(file -> file != null && !file.isEmpty())
 				.collect(Collectors.toList());
@@ -97,6 +97,7 @@ public class HighlightService {
 		List<String> inputNames = videos.stream().map(MultipartFile::getOriginalFilename).collect(Collectors.toList());
 		String safeCutNote = sanitizeNote(cutNote);
 		HighlightJobStatus status = new HighlightJobStatus(jobId, inputNames.get(0));
+		status.setOwner(safeOwner(owner));
 		status.setInputFileNames(inputNames);
 		status.setCutNote(safeCutNote);
 		statuses.put(jobId, status);
@@ -136,7 +137,7 @@ public class HighlightService {
 		}
 	}
 
-	public HighlightJobStatus createSplitClips(List<MultipartFile> files, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String aspectRatio) {
+	public HighlightJobStatus createSplitClips(List<MultipartFile> files, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String aspectRatio, String owner) {
 		List<MultipartFile> videos = files == null ? List.of() : files.stream()
 				.filter(file -> file != null && !file.isEmpty())
 				.collect(Collectors.toList());
@@ -155,6 +156,7 @@ public class HighlightService {
 		List<String> inputNames = videos.stream().map(MultipartFile::getOriginalFilename).collect(Collectors.toList());
 		String safeCutNote = sanitizeNote(cutNote);
 		HighlightJobStatus status = new HighlightJobStatus(jobId, inputNames.get(0));
+		status.setOwner(safeOwner(owner));
 		status.setInputFileNames(inputNames);
 		status.setCutNote(safeCutNote);
 		statuses.put(jobId, status);
@@ -193,7 +195,7 @@ public class HighlightService {
 		}
 	}
 
-	public HighlightJobStatus createHighlightFromUrls(List<String> urls, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String cookiesFilePath, String aspectRatio) {
+	public HighlightJobStatus createHighlightFromUrls(List<String> urls, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String cookiesFilePath, String aspectRatio, String owner) {
 		List<String> videoUrls = normalizeUrls(urls);
 		if (videoUrls.isEmpty()) {
 			throw new IllegalArgumentException("Hãy nhập ít nhất 1 link video.");
@@ -210,6 +212,7 @@ public class HighlightService {
 		Path outputDirectory = jobDirectory.resolve("output");
 		String safeCutNote = sanitizeNote(cutNote);
 		HighlightJobStatus status = new HighlightJobStatus(jobId, videoUrls.get(0));
+		status.setOwner(safeOwner(owner));
 		status.setInputFileNames(videoUrls);
 		status.setCutNote(safeCutNote);
 		statuses.put(jobId, status);
@@ -222,7 +225,7 @@ public class HighlightService {
 		return status;
 	}
 
-	public HighlightJobStatus createSplitClipsFromUrls(List<String> urls, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String cookiesFilePath, String aspectRatio) {
+	public HighlightJobStatus createSplitClipsFromUrls(List<String> urls, Integer requestedClipCount, Double requestedClipSeconds, String cutNote, String cookiesFilePath, String aspectRatio, String owner) {
 		List<String> videoUrls = normalizeUrls(urls);
 		if (videoUrls.isEmpty()) {
 			throw new IllegalArgumentException("Hãy nhập ít nhất 1 link video.");
@@ -238,6 +241,7 @@ public class HighlightService {
 		Path outputDirectory = jobDirectory.resolve("output");
 		String safeCutNote = sanitizeNote(cutNote);
 		HighlightJobStatus status = new HighlightJobStatus(jobId, videoUrls.get(0));
+		status.setOwner(safeOwner(owner));
 		status.setInputFileNames(videoUrls);
 		status.setCutNote(safeCutNote);
 		statuses.put(jobId, status);
@@ -250,6 +254,11 @@ public class HighlightService {
 		return status;
 	}
 
+	public HighlightJobStatus status(String jobId, String owner) {
+		assertJobOwner(jobId, owner);
+		return status(jobId);
+	}
+
 	public HighlightJobStatus status(String jobId) {
 		HighlightJobStatus status = statuses.get(jobId);
 		if (status == null) {
@@ -258,12 +267,13 @@ public class HighlightService {
 		return status;
 	}
 
-	public HighlightHistoryPage history(int page, int size) {
+	public HighlightHistoryPage history(int page, int size, String owner) {
 		workspace.ensureBaseDirectories();
 		int safePage = Math.max(1, page);
 		int safeSize = Math.max(1, Math.min(50, size));
 		List<HighlightHistoryItem> items = readHistoryItems().stream()
 				.filter(this::isHighlightHistory)
+				.filter(item -> ownerMatches(item.getOwner(), owner))
 				.collect(Collectors.toList());
 		items.sort(Comparator.comparing(HighlightHistoryItem::getCreatedAt, Comparator.nullsLast(String::compareTo)).reversed());
 		int totalPages = (int) Math.ceil(items.size() / (double) safeSize);
@@ -272,12 +282,13 @@ public class HighlightService {
 		return new HighlightHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
 	}
 
-	public HighlightHistoryPage manualEditHistory(int page, int size) {
+	public HighlightHistoryPage manualEditHistory(int page, int size, String owner) {
 		workspace.ensureBaseDirectories();
 		int safePage = Math.max(1, page);
 		int safeSize = Math.max(1, Math.min(50, size));
 		List<HighlightHistoryItem> items = readHistoryItems().stream()
 				.filter(this::isManualEditHistory)
+				.filter(item -> ownerMatches(item.getOwner(), owner))
 				.collect(Collectors.toList());
 		items.sort(Comparator.comparing(HighlightHistoryItem::getCreatedAt, Comparator.nullsLast(String::compareTo)).reversed());
 		int totalPages = (int) Math.ceil(items.size() / (double) safeSize);
@@ -286,12 +297,13 @@ public class HighlightService {
 		return new HighlightHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
 	}
 
-	public HighlightHistoryPage facebookBatchHistory(int page, int size) {
+	public HighlightHistoryPage facebookBatchHistory(int page, int size, String owner) {
 		workspace.ensureBaseDirectories();
 		int safePage = Math.max(1, page);
 		int safeSize = Math.max(1, Math.min(50, size));
 		List<HighlightHistoryItem> items = readHistoryItems().stream()
 				.filter(this::isFacebookBatchHistory)
+				.filter(item -> ownerMatches(item.getOwner(), owner))
 				.collect(Collectors.toList());
 		items.sort(Comparator.comparing(HighlightHistoryItem::getCreatedAt, Comparator.nullsLast(String::compareTo)).reversed());
 		int totalPages = (int) Math.ceil(items.size() / (double) safeSize);
@@ -300,7 +312,7 @@ public class HighlightService {
 		return new HighlightHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
 	}
 
-	public HighlightJobStatus createFacebookBatchDownload(String reelsUrl, Integer requestedStartIndex, Integer requestedEndIndex, String cookiesFilePath) {
+	public HighlightJobStatus createFacebookBatchDownload(String reelsUrl, Integer requestedStartIndex, Integer requestedEndIndex, String cookiesFilePath, String owner) {
 		List<String> urls = normalizeBatchUrls(reelsUrl);
 		if (urls.isEmpty()) {
 			throw new IllegalArgumentException("Hãy nhập link danh sách video reels Facebook.");
@@ -317,6 +329,7 @@ public class HighlightService {
 		String sourceUrl = urls.get(0);
 		String note = "Facebook reels: " + sourceUrl + (urls.size() > 1 ? " và " + (urls.size() - 1) + " link khác" : "") + " | khoảng " + startIndex + "-" + endIndex;
 		HighlightJobStatus status = new HighlightJobStatus(jobId, sourceUrl);
+		status.setOwner(safeOwner(owner));
 		status.setInputFileNames(urls);
 		status.setCutNote(note);
 		statuses.put(jobId, status);
@@ -328,11 +341,13 @@ public class HighlightService {
 		return status;
 	}
 
-	public SplitClipHistoryPage splitHistory(int page, int size) {
+	public SplitClipHistoryPage splitHistory(int page, int size, String owner) {
 		workspace.ensureBaseDirectories();
 		int safePage = Math.max(1, page);
 		int safeSize = Math.max(1, Math.min(50, size));
-		List<SplitClipHistoryItem> items = readSplitHistoryItems();
+		List<SplitClipHistoryItem> items = readSplitHistoryItems().stream()
+				.filter(item -> ownerMatches(item.getOwner(), owner))
+				.collect(Collectors.toList());
 		items.sort(Comparator.comparing((SplitClipHistoryItem item) -> item.getCreatedAt() == null ? "" : item.getCreatedAt()).reversed()
 				.thenComparing(SplitClipHistoryItem::getJobId, Comparator.nullsLast(String::compareTo))
 				.thenComparing(SplitClipHistoryItem::getClipIndex));
@@ -342,7 +357,7 @@ public class HighlightService {
 		return new SplitClipHistoryPage(items.subList(from, to), safePage, safeSize, items.size(), totalPages);
 	}
 
-	public VideoEditResult createEditableVideo(MultipartFile file) {
+	public VideoEditResult createEditableVideo(MultipartFile file, String owner) {
 		if (file == null || file.isEmpty()) {
 			throw new IllegalArgumentException("Hãy chọn hoặc kéo một file video để chỉnh sửa.");
 		}
@@ -358,7 +373,7 @@ public class HighlightService {
 		try {
 			Files.createDirectories(uploadDirectory);
 			file.transferTo(uploadedVideo);
-			return createEditableVideoRecord(jobId, uploadedVideo, originalName, "Video upload để chỉnh sửa thủ công.");
+			return createEditableVideoRecord(jobId, uploadedVideo, originalName, "Video upload để chỉnh sửa thủ công.", owner);
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException("Không thể lưu video để chỉnh sửa.", ex);
@@ -367,12 +382,13 @@ public class HighlightService {
 			writeError(jobDirectory, ex);
 			HighlightHistoryItem item = toHistory(new HighlightJobStatus(jobId, originalName), "error", 0, 0, null, ex.getMessage());
 			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT);
+			item.setOwner(safeOwner(owner));
 			saveManifest(jobDirectory, item);
 			throw ex;
 		}
 	}
 
-	public VideoEditResult createEditableVideoFromUrls(List<String> urls, String cookiesFilePath) {
+	public VideoEditResult createEditableVideoFromUrls(List<String> urls, String cookiesFilePath, String owner) {
 		List<String> videoUrls = normalizeUrls(urls);
 		if (videoUrls.isEmpty()) {
 			throw new IllegalArgumentException("Hãy nhập ít nhất 1 link video.");
@@ -387,7 +403,7 @@ public class HighlightService {
 		try {
 			Files.createDirectories(uploadDirectory);
 			Path downloaded = networkVideoDownloadService.downloadBestUpTo2k(videoUrls.get(0), uploadDirectory, 1, sanitizeNote(cookiesFilePath));
-			return createEditableVideoRecord(jobId, downloaded, videoUrls.get(0), "Video tải từ link để chỉnh sửa thủ công.");
+			return createEditableVideoRecord(jobId, downloaded, videoUrls.get(0), "Video tải từ link để chỉnh sửa thủ công.", owner);
 		}
 		catch (IOException ex) {
 			throw new IllegalStateException("Không thể chuẩn bị thư mục tải video từ link.", ex);
@@ -395,14 +411,16 @@ public class HighlightService {
 		catch (RuntimeException ex) {
 			writeError(jobDirectory, ex);
 			HighlightJobStatus status = new HighlightJobStatus(jobId, videoUrls.get(0));
+			status.setOwner(safeOwner(owner));
 			HighlightHistoryItem item = toHistory(status, "error", 0, 0, null, ex.getMessage());
 			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT);
+			item.setOwner(safeOwner(owner));
 			saveManifest(jobDirectory, item);
 			throw ex;
 		}
 	}
 
-	private VideoEditResult createEditableVideoRecord(String jobId, Path source, String title, String note) {
+	private VideoEditResult createEditableVideoRecord(String jobId, Path source, String title, String note, String owner) {
 		Path jobDirectory = jobDirectory(jobId);
 		Path workDirectory = jobDirectory.resolve("work");
 		Path outputDirectory = jobDirectory.resolve("output");
@@ -425,6 +443,7 @@ public class HighlightService {
 					"/api/highlights/" + jobId + "/download",
 					null);
 			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT);
+			item.setOwner(safeOwner(owner));
 			saveManifest(jobDirectory, item);
 			enforceHistoryLimit(jobId);
 			LOGGER.info("[{}] Đã tạo job chỉnh sửa thủ công từ {}", jobId, source);
@@ -435,6 +454,11 @@ public class HighlightService {
 		}
 	}
 
+	public void assertJobOwner(String jobId, String owner) {
+		if (!isJobOwnedBy(jobId, owner)) {
+			throw new IllegalArgumentException("Khong tim thay video cua tai khoan hien tai.");
+		}
+	}
 	public Path downloadPath(String jobId) {
 		Path output = jobDirectory(jobId).resolve("output").resolve("highlight.mp4").normalize();
 		if (!Files.isRegularFile(output)) {
@@ -487,7 +511,7 @@ public class HighlightService {
 		LOGGER.info("[{}] Tải xuống hoàn tất. Giữ lại file trên server theo cấu hình lịch sử.", jobId);
 	}
 
-	public HighlightDeleteResult deleteHighlights(List<String> jobIds) {
+	public HighlightDeleteResult deleteHighlights(List<String> jobIds, String owner) {
 		workspace.ensureBaseDirectories();
 		List<String> requestedIds = jobIds == null ? List.of() : jobIds.stream()
 				.filter(id -> id != null && !id.isBlank())
@@ -506,7 +530,7 @@ public class HighlightService {
 		return new HighlightDeleteResult(deleted.size(), deleted, skipped);
 	}
 
-	public HighlightDeleteResult deleteManualEditVideos(List<String> jobIds) {
+	public HighlightDeleteResult deleteManualEditVideos(List<String> jobIds, String owner) {
 		workspace.ensureBaseDirectories();
 		List<String> requestedIds = jobIds == null ? List.of() : jobIds.stream()
 				.filter(id -> id != null && !id.isBlank())
@@ -517,7 +541,7 @@ public class HighlightService {
 		for (String jobId : requestedIds) {
 			Path manifest = jobDirectory(jobId).resolve("manifest.json");
 			HighlightHistoryItem item = Files.isRegularFile(manifest) ? readManifest(manifest) : null;
-			if (isManualEditHistory(item) && deleteJobDirectory(jobId, "người dùng xóa lịch sử edit video")) {
+			if (ownerMatches(item == null ? null : item.getOwner(), owner) && isManualEditHistory(item) && deleteJobDirectory(jobId, "người dùng xóa lịch sử edit video")) {
 				deleted.add(jobId);
 			}
 			else {
@@ -527,7 +551,7 @@ public class HighlightService {
 		return new HighlightDeleteResult(deleted.size(), deleted, skipped);
 	}
 
-	public HighlightDeleteResult deleteFacebookBatchVideos(List<String> jobIds) {
+	public HighlightDeleteResult deleteFacebookBatchVideos(List<String> jobIds, String owner) {
 		workspace.ensureBaseDirectories();
 		List<String> requestedIds = jobIds == null ? List.of() : jobIds.stream()
 				.filter(id -> id != null && !id.isBlank())
@@ -538,7 +562,7 @@ public class HighlightService {
 		for (String jobId : requestedIds) {
 			Path manifest = jobDirectory(jobId).resolve("manifest.json");
 			HighlightHistoryItem item = Files.isRegularFile(manifest) ? readManifest(manifest) : null;
-			if (isFacebookBatchHistory(item) && deleteJobDirectory(jobId, "người dùng xóa batch Facebook")) {
+			if (ownerMatches(item == null ? null : item.getOwner(), owner) && isFacebookBatchHistory(item) && deleteJobDirectory(jobId, "người dùng xóa batch Facebook")) {
 				deleted.add(jobId);
 			}
 			else {
@@ -548,7 +572,7 @@ public class HighlightService {
 		return new HighlightDeleteResult(deleted.size(), deleted, skipped);
 	}
 
-	public SplitClipDeleteResult deleteSplitClips(List<SplitClipDeleteRequest.ClipRef> clips) {
+	public SplitClipDeleteResult deleteSplitClips(List<SplitClipDeleteRequest.ClipRef> clips, String owner) {
 		workspace.ensureBaseDirectories();
 		List<SplitClipDeleteRequest.ClipRef> requestedClips = clips == null ? List.of() : clips.stream()
 				.filter(ref -> ref != null && ref.getJobId() != null && !ref.getJobId().isBlank() && ref.getClipIndex() > 0)
@@ -563,7 +587,7 @@ public class HighlightService {
 		List<String> skipped = new ArrayList<>();
 		for (SplitClipDeleteRequest.ClipRef clip : requestedClips) {
 			String key = splitClipKey(clip.getJobId(), clip.getClipIndex());
-			if (deleteSplitClip(clip.getJobId(), clip.getClipIndex())) {
+			if (isJobOwnedBy(clip.getJobId(), owner) && deleteSplitClip(clip.getJobId(), clip.getClipIndex())) {
 				deleted.add(key);
 			}
 			else {
@@ -1410,6 +1434,7 @@ public class HighlightService {
 					"/api/highlights/" + jobId + "/download",
 					null);
 			item.setCategory(CATEGORY_MANUAL_EDIT_DRAFT.equalsIgnoreCase(sourceCategory) ? CATEGORY_MANUAL_EDIT : sourceCategory);
+			item.setOwner(ownerForSource(source));
 			saveManifest(jobDirectory, item);
 			if (sourceDraftJobId != null && !sourceDraftJobId.equals(jobId)) {
 				deleteJobDirectory(sourceDraftJobId, "đã tạo bản chỉnh sửa mới nên xóa job upload nháp");
@@ -1454,6 +1479,7 @@ public class HighlightService {
 					duration,
 					"/api/split-highlights/" + jobId + "/clips/1/download",
 					null);
+			item.setOwner(ownerForSource(source));
 			saveSplitManifest(jobDirectory, List.of(item));
 			enforceHistoryLimit(jobId);
 			LOGGER.info("[{}] Đã tạo bản ghi clip tách chỉnh sửa mới từ {}", jobId, source);
@@ -1766,7 +1792,7 @@ public class HighlightService {
 		}
 		if (!updated) {
 			items = new ArrayList<>(items);
-			items.add(new SplitClipHistoryItem(
+			SplitClipHistoryItem newItem = new SplitClipHistoryItem(
 					jobId,
 					clipIndex,
 					"ready",
@@ -1778,7 +1804,9 @@ public class HighlightService {
 					0,
 					ffmpegService.probeDuration(output),
 					"/api/split-highlights/" + jobId + "/clips/" + clipIndex + "/download",
-					null));
+					null);
+			newItem.setOwner(ownerForJob(jobId));
+			items.add(newItem);
 		}
 		saveSplitManifest(jobDirectory, items);
 	}
@@ -1897,6 +1925,51 @@ public class HighlightService {
 				|| "Video tải từ link để chỉnh sửa thủ công.".equals(note);
 	}
 
+	private String ownerForSource(Path source) {
+		if (source == null) {
+			return "local";
+		}
+		Path current = source.toAbsolutePath().normalize();
+		while (current != null) {
+			Path manifest = current.resolve("manifest.json");
+			if (Files.isRegularFile(manifest)) {
+				HighlightHistoryItem item = readManifest(manifest);
+				if (item != null && item.getOwner() != null && !item.getOwner().isBlank()) {
+					return item.getOwner();
+				}
+			}
+			Path splitManifest = current.resolve("split-manifest.json");
+			if (Files.isRegularFile(splitManifest)) {
+				for (SplitClipHistoryItem item : readSplitManifest(splitManifest)) {
+					if (item.getOwner() != null && !item.getOwner().isBlank()) {
+						return item.getOwner();
+					}
+				}
+			}
+			current = current.getParent();
+		}
+		return "local";
+	}
+
+	private String ownerForJob(String jobId) {
+		Path manifest = jobDirectory(jobId).resolve("manifest.json");
+		if (Files.isRegularFile(manifest)) {
+			HighlightHistoryItem item = readManifest(manifest);
+			if (item != null && item.getOwner() != null && !item.getOwner().isBlank()) {
+				return item.getOwner();
+			}
+		}
+		Path splitManifest = jobDirectory(jobId).resolve("split-manifest.json");
+		if (Files.isRegularFile(splitManifest)) {
+			for (SplitClipHistoryItem item : readSplitManifest(splitManifest)) {
+				if (item.getOwner() != null && !item.getOwner().isBlank()) {
+					return item.getOwner();
+				}
+			}
+		}
+		HighlightJobStatus status = statuses.get(jobId);
+		return status == null ? "local" : safeOwner(status.getOwner());
+	}
 	private String categoryForSource(Path source) {
 		if (source == null) {
 			return CATEGORY_HIGHLIGHT;
@@ -2046,7 +2119,7 @@ public class HighlightService {
 
 	private HighlightHistoryItem toHistory(HighlightJobStatus status, String state, double totalDuration, int clipsUsed, String downloadUrl, String error) {
 		String now = Instant.now().toString();
-		return new HighlightHistoryItem(
+		HighlightHistoryItem item = new HighlightHistoryItem(
 				status.getJobId(),
 				state,
 				now,
@@ -2057,12 +2130,14 @@ public class HighlightService {
 				clipsUsed,
 				downloadUrl,
 				error);
+		item.setOwner(status.getOwner());
+		return item;
 	}
 
 	private SplitClipHistoryItem toSplitHistory(HighlightJobStatus status, int clipIndex, String state, String originalFileName,
 			String outputFileName, double startSeconds, double durationSeconds, String downloadUrl, String error) {
 		String now = Instant.now().toString();
-		return new SplitClipHistoryItem(
+		SplitClipHistoryItem item = new SplitClipHistoryItem(
 				status.getJobId(),
 				clipIndex,
 				state,
@@ -2075,8 +2150,36 @@ public class HighlightService {
 				durationSeconds,
 				downloadUrl,
 				error);
+		item.setOwner(status.getOwner());
+		return item;
 	}
 
+	private String safeOwner(String owner) {
+		return owner == null || owner.isBlank() ? "local" : owner.trim();
+	}
+
+	private boolean ownerMatches(String itemOwner, String owner) {
+		String safe = safeOwner(owner);
+		return "*".equals(safe) || safe.equals(itemOwner == null ? "" : itemOwner.trim());
+	}
+
+	private boolean isJobOwnedBy(String jobId, String owner) {
+		HighlightJobStatus status = statuses.get(jobId);
+		if (status != null && !ownerMatches(status.getOwner(), owner)) {
+			return false;
+		}
+		Path manifest = jobDirectory(jobId).resolve("manifest.json");
+		if (Files.isRegularFile(manifest)) {
+			HighlightHistoryItem item = readManifest(manifest);
+			return item != null && ownerMatches(item.getOwner(), owner);
+		}
+		Path splitManifest = jobDirectory(jobId).resolve("split-manifest.json");
+		if (Files.isRegularFile(splitManifest)) {
+			List<SplitClipHistoryItem> items = readSplitManifest(splitManifest);
+			return items.isEmpty() || items.stream().anyMatch(item -> ownerMatches(item.getOwner(), owner));
+		}
+		return false;
+	}
 	private String originalNameFor(HighlightJobStatus status, int sourceIndex) {
 		List<String> names = status.getInputFileNames();
 		if (names != null && sourceIndex >= 0 && sourceIndex < names.size()) {

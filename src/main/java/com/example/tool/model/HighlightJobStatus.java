@@ -19,6 +19,7 @@ public class HighlightJobStatus {
 	private volatile List<Double> selectedStarts;
 	private volatile List<String> warnings;
 	private volatile String error;
+	private volatile String owner;
 
 	public HighlightJobStatus(String jobId, String originalFileName) {
 		this.jobId = jobId;
@@ -127,5 +128,13 @@ public class HighlightJobStatus {
 		this.progress = 100;
 		this.phase = "Xử lý thất bại.";
 		this.error = message;
+	}
+
+	public String getOwner() {
+		return owner;
+	}
+
+	public void setOwner(String owner) {
+		this.owner = owner;
 	}
 }
