@@ -7,6 +7,7 @@
       <div>
         <h1>Quản lý cắt video</h1>
         <p>Upload hoặc dán link video, phân tích đoạn nổi bật và quản lý lịch sử render.</p>
+        <p>Anh em nên thường xuyên xóa video đã sử dụng rồi để tránh đầy ổ trên máy.</p>
       </div>
     </div>
     <div class="header-actions"><div class="auth-user" id="authUser" hidden></div><button class="btn btn-sm btn-outline-secondary" type="button" id="logoutButton" hidden>Dang xuat</button><div class="health" id="health">Dang kiem tra FFmpeg...</div></div>
